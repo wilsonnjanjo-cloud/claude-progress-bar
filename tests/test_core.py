@@ -26,6 +26,22 @@ check("pct: nothing yet", c.parse_pct("no progress yet\n"), (0, "starting", "run
 check("hf: exit 0", c.parse_hf("50%  Rendering frames\nEXIT 0\n")[2], "done")
 check("ffmpeg: progress=end", c.parse_ffmpeg("frame=10\nprogress=end\n", 100)[2], "done")
 
+# --- numbered output files
+frames = ["f_%04d.png" % i for i in range(1, 233)] + ["notes.txt", "f_0300.jpg"]
+check("files: 40 of 193-240 present", c.parse_files(frames, "f_####.png", 193, 240), (83, "40/48 frames", "run"))
+check("files: all present is done", c.parse_files(frames + ["f_%04d.png" % i for i in range(233, 241)], "f_####.png", 193, 240), (100, "48/48 frames", "done"))
+check("files: none yet", c.parse_files([], "f_####.png", 193, 240), (0, "0/48 frames", "run"))
+check("files: case-insensitive, own unit", c.parse_files(["SHOT_007.PNG"], "shot_###.png", 1, 10, "images"), (10, "1/10 images", "run"))
+
+# --- progress printed by background commands
+check("output: percent", c.parse_output_progress("loading\nRendering 42%\n"), (42, "Rendering 42%"))
+check("output: N/M", c.parse_output_progress("frame 12/48 done\n"), (25, "12/48"))
+check("output: N of M", c.parse_output_progress("item 3 of 4\n"), (75, "3/4"))
+check("output: Blender Fra:", c.parse_output_progress("Fra:193 Mem:512M | Rendering 3/40 samples\nFra:195 Mem:512M\n"), (-1, "frame 195"))
+check("output: a date is not progress", c.parse_output_progress("saved 11/07/2026\n"), None)
+check("output: a 01/07 date is not progress", c.parse_output_progress("run on 01/07/2026\n"), None)
+check("output: nothing", c.parse_output_progress("hello\n"), None)
+
 # --- transcripts
 wait = '{"type":"user","message":{"content":[{"type":"text","text":"go"}]}}\n' \
        '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1"}]}}\n'

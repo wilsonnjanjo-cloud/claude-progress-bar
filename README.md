@@ -5,7 +5,8 @@ A small window for **Windows** (and **macOS, in beta**) that shows **one live ba
 - Background shell commands (`run_in_background`, or commands Claude moved to the background)
 - Subagents, named the same way as in Claude Code's Background tasks panel
 - Foreground commands that run longer than 10 seconds
-- Long jobs you register yourself (renders, ffmpeg, scripts) with a real percentage
+- Long jobs you register yourself (renders, ffmpeg, scripts) with a real percentage, or a count such as **40/48 frames** from the files a render writes
+- Progress that background commands print (`42%`, `12/48`, Blender's `Fra:193`) is shown on their bar automatically
 
 <!-- ![Claude Progress Bar](docs/screenshot.png) -->
 
@@ -84,6 +85,20 @@ pwsh -File scripts\progress_job.ps1 -Name "Export" -Kind pct -Log C:\work\export
 python3 scripts/progress_job.py --name "Final render" --kind pct --log ~/work/progress.txt --pid 1234
 ```
 
+**Renders and exports that write numbered files** need no progress log at all: the bar counts the files. `####` in the pattern stands for the number:
+
+```powershell
+# Windows: Blender writing f_0193.png ... f_0240.png
+pwsh -File scripts\progress_job.ps1 -Name "Render frames 193-240" -Kind files -Dir C:\work\frames -Pattern "f_####.png" -First 193 -Last 240 -ProcessId 1234
+```
+
+```bash
+# macOS
+python3 scripts/progress_job.py --name "Render frames 193-240" --kind files --dir ~/work/frames --pattern "f_####.png" --first 193 --last 240 --pid 1234
+```
+
+The bar reads `40/48 frames` and finishes by itself when the last file appears. Use `-Unit images` (`--unit`) for anything that is not frames.
+
 Running the same job again with the same log file replaces its old bar.
 
 ### How it decides a task has stalled
@@ -112,7 +127,8 @@ Runtime data (task files and an event log) lives in `%LOCALAPPDATA%\ClaudeProgre
 
 ### Tests
 
-- `python tests/test_core.py`: the shared behaviour cases (progress formats, transcripts, stall rules) against the Python core.
+- `python tests/test_core.py`: the shared behaviour cases (progress formats, file counts, transcripts, stall rules) against the Python core.
+- `pwsh -File tests/windows_parsers_test.ps1`: the same progress and file-count cases against the Windows window.
 - `python3 tests/window_smoke_test.py`: runs the Python window for a minute against six fake tasks.
 - `pwsh -File tests/windows_alarm_test.ps1`: the same six tasks against the Windows window.
 

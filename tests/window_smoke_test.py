@@ -52,6 +52,12 @@ job("M4", kind="pct", name="render hung process", pid=idle.pid, stall=30, log=wr
 job("M5", kind="pct", name="render finished", stall=30, log=write("done.txt", "100% (192/192 frames)\n"))
 job("M6", kind="pct", name="render no pid quiet", stall=30, log=write("nopid.txt", "40% (77/192 frames)\n"))
 
+frames = os.path.join(T, "frames")
+os.makedirs(frames)
+for i in range(1, 233):   # 40 of frames 193-240 rendered so far: a healthy file-count job, no alarm
+    open(os.path.join(frames, "f_%04d.png" % i), "w").close()
+job("M7", kind="files", name="render frames 193-240", log=frames, pattern="f_####.png", first=193, last=240)
+
 win = subprocess.Popen([sys.executable, WINDOW, "--data", D], stderr=subprocess.PIPE, text=True)
 try:
     time.sleep(60)

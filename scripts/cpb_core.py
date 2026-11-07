@@ -69,6 +69,52 @@ def parse_ffmpeg(tail, total):
     return 0, "starting", "run"
 
 
+def pattern_regex(pattern):
+    """File pattern with #### for the number, e.g. "f_####.png" -> regex matching f_0193.png (case-insensitive).
+    A pattern without # matches any number before the extension: "*.png" style is not needed."""
+    if "#" not in pattern:
+        return re.compile(r"^.*?(\d+)\D*$", re.I)
+    parts = re.split(r"(#+)", pattern)
+    rx = "".join(r"(\d+)" if p.startswith("#") else re.escape(p).replace(r"\*", ".*") for p in parts)
+    return re.compile("^" + rx + "$", re.I)
+
+
+def parse_files(names, pattern, first, last, unit="frames"):
+    """Progress from numbered output files: how many of first..last exist among `names` (file names in the folder).
+    Returns (pct, text, state)."""
+    rx = pattern_regex(pattern)
+    first, last = int(first), int(last)
+    total = max(1, last - first + 1)
+    have = set()
+    for n in names:
+        m = rx.match(n)
+        if m:
+            k = int(m.group(1))
+            if first <= k <= last:
+                have.add(k)
+    done = len(have)
+    if done >= total:
+        return 100, "%d/%d %s" % (total, total, unit), "done"
+    return int(100 * done / total), "%d/%d %s" % (done, total, unit), "run"
+
+
+def parse_output_progress(tail):
+    """Progress printed by a background command, from its last few output lines. Returns (pct, text) or None.
+    Understands "42%", "12/48", "12 of 48" and Blender's "Fra:193" (no total: frame number only, pct -1)."""
+    lines = [l.strip() for l in (tail or "").replace("\r", "\n").splitlines() if l.strip()][-3:]
+    for l in reversed(lines):
+        m = re.search(r"(\d{1,3}(?:\.\d+)?)\s*%", l)
+        if m and float(m.group(1)) <= 100:
+            return int(float(m.group(1))), l[:60]
+        m = re.search(r"(?<![/\d.])\b(\d+)\s*(?:/|of)\s*(\d+)\b(?![/\d.])", l)   # not dates like 01/07/2026
+        if m and 0 < int(m.group(2)) and int(m.group(1)) <= int(m.group(2)):
+            return int(100 * int(m.group(1)) / int(m.group(2))), "%s/%s" % (m.group(1), m.group(2))
+        m = re.search(r"\bFra:\s*(\d+)", l)
+        if m:
+            return -1, "frame %s" % m.group(1)
+    return None
+
+
 # ---------------------------------------------------------------- transcripts
 
 def agent_waiting(tail):
@@ -166,7 +212,7 @@ def judge(w, job, state, now, started, log_time, cpu_seconds=None, pid_alive=Non
         out["state"], out["text"] = "fail", "no result after 11m - session closed or command interrupted"
     elif kind == "agent" and quiet > AGENT_MAX_QUIET:
         out["state"], out["text"] = "fail", "no activity for 1h - session closed or agent stuck"
-    elif kind in ("pct", "hf", "ffmpeg") and not job.get("pid") and quiet > MANUAL_MAX_QUIET:
+    elif kind in ("pct", "hf", "ffmpeg", "files") and not job.get("pid") and quiet > MANUAL_MAX_QUIET:
         out["state"], out["text"] = "closed", "closed: no progress for 1h"
     elif quiet > amber and why:
         out["level"], out["text"] = "quiet", "%s, quiet %s" % (why, fmt_age(quiet))

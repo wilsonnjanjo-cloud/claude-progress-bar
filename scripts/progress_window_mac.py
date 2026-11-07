@@ -281,7 +281,16 @@ class App:
                 return (-1, "running", "run") if now - started < 60 else (100, "finished", "done")
             if plat.file_in_use(log) is False and now - (mtime(log) or now) > 10:
                 return 100, "finished", "done"
-            return -1, "running", "run"
+            shown = core.parse_output_progress(read_tail(log, 4096))   # "42%", "12/48", "Fra:193" in its output
+            return (shown[0], shown[1], "run") if shown else (-1, "running", "run")
+        if kind == "files":
+            # numbered output files (renders, exports): count first..last in the folder
+            try:
+                names = os.listdir(job.get("log") or "")
+            except OSError:
+                names = []
+            return core.parse_files(names, job.get("pattern") or "", job.get("first") or 1, job.get("last") or 1,
+                                    job.get("unit") or "frames")
         if kind == "agent":
             return (100, "finished", "done") if job.get("state") == "done" else (-1, "working", "run")
         if kind == "fg":

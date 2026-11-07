@@ -2,8 +2,11 @@
 
   python3 progress_job.py --name "Render" --kind pct --log ~/work/progress.txt --pid 1234
   python3 progress_job.py --name "Master" --kind ffmpeg --log ~/work/prog.txt --total 1051 --pid 5678
+  python3 progress_job.py --name "Render frames 193-240" --kind files --dir ~/work/frames --pattern "f_####.png" \
+      --first 193 --last 240 --pid 4321
 
 pct logs: write "NN|text" or "NN% text" lines and end with "DONE|text" (or "FAIL|text"); a 100% line also counts as done.
+files: counts numbered output files (#### = the number) from --first to --last in --dir: "40/48 frames" (--unit renames).
 Always pass --pid when you can: the bar then tells a busy job from a hung one, and knows the moment it ends.
 """
 import argparse
@@ -20,15 +23,27 @@ import hook  # noqa: E402  (same data folder and window launcher as the Claude h
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--name", required=True)
-    ap.add_argument("--kind", choices=["pct", "hf", "ffmpeg"], default="pct")
-    ap.add_argument("--log", required=True, help="progress file the job writes")
+    ap.add_argument("--kind", choices=["pct", "hf", "ffmpeg", "files"], default="pct")
+    ap.add_argument("--log", default="", help="progress file the job writes (not for --kind files)")
+    ap.add_argument("--dir", default="", help="files: folder the numbered files appear in")
+    ap.add_argument("--pattern", default="", help='files: file name with #### for the number, e.g. "f_####.png"')
+    ap.add_argument("--first", type=int, default=1)
+    ap.add_argument("--last", type=int, default=0)
+    ap.add_argument("--unit", default="frames")
     ap.add_argument("--pid", type=int, default=0, help="the working process (render/encode), not a wrapper shell")
     ap.add_argument("--total", type=int, default=0, help="ffmpeg: total frames")
     ap.add_argument("--stall", type=int, default=300, help="seconds of silence before a stall can be reported")
     ap.add_argument("--project", default="")
     a = ap.parse_args()
 
-    log = os.path.abspath(os.path.expanduser(a.log))
+    if a.kind == "files":
+        if not (a.dir and a.pattern and a.last >= a.first):
+            ap.error("--kind files needs --dir, --pattern (e.g. f_####.png), --first and --last")
+        log = os.path.abspath(os.path.expanduser(a.dir))   # the folder is what the bar watches
+    elif a.log:
+        log = os.path.abspath(os.path.expanduser(a.log))
+    else:
+        ap.error("--log is required (or use --kind files with --dir)")
     os.makedirs(hook.JOBS, exist_ok=True)
     # a re-run of the same job (same log file) replaces its earlier registration
     for name in os.listdir(hook.JOBS):
@@ -40,6 +55,8 @@ def main():
             except (OSError, ValueError):
                 pass
     job = {"kind": a.kind, "name": a.name, "log": log, "total": a.total, "stall": a.stall, "started": time.time()}
+    if a.kind == "files":
+        job.update(pattern=a.pattern, first=a.first, last=a.last, unit=a.unit)
     if a.pid:
         job["pid"] = a.pid
     if a.project:

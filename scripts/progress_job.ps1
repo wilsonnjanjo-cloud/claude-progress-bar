@@ -2,14 +2,22 @@
 # usage: progress_job.ps1 -Name "Render" -Kind hf -Log C:\...\render.log [-ProcessId 1234] [-StallSeconds 120] [-Project Demo]
 #        progress_job.ps1 -Name "Master" -Kind ffmpeg -Log C:\...\prog.txt -Total 1051
 #        progress_job.ps1 -Name "Export" -Kind pct -Log C:\...\export_prog.txt
+#        progress_job.ps1 -Name "Render frames 193-240" -Kind files -Dir C:\...\frames -Pattern "f_####.png" -First 193 -Last 240 -ProcessId 1234
 # pct logs: write "NN|text" or "NN% text" lines and end with "DONE|text" (or "FAIL|text"); a 100% line also counts as done.
+# files: counts numbered output files (#### = the number) between -First and -Last in -Dir: "40/48 frames". -Unit renames "frames".
 # Always pass -ProcessId when you can: the bar then knows the moment the process ends instead of waiting for silence.
 # -ProcessId: the bar turns red if that process exits without reporting an end. -StallSeconds: red + alert after this much quiet (default 300; amber at 2 min).
-param([Parameter(Mandatory)][string]$Name, [ValidateSet("hf", "ffmpeg", "pct", "shell")][string]$Kind = "pct",
-      [Parameter(Mandatory)][string]$Log, [int]$Total = 0, [int]$ProcessId = 0, [int]$StallSeconds = 300, [string]$Project = "")
+param([Parameter(Mandatory)][string]$Name, [ValidateSet("hf", "ffmpeg", "pct", "shell", "files")][string]$Kind = "pct",
+      [string]$Log = "", [int]$Total = 0, [int]$ProcessId = 0, [int]$StallSeconds = 300, [string]$Project = "",
+      [string]$Dir = "", [string]$Pattern = "", [int]$First = 1, [int]$Last = 0, [string]$Unit = "frames")
+if ($Kind -eq "files") {
+  if (-not $Dir -or -not $Pattern -or $Last -lt $First) { throw "-Kind files needs -Dir, -Pattern (e.g. f_####.png), -First and -Last" }
+  $Log = [IO.Path]::GetFullPath($Dir)   # the folder is what the bar watches
+} elseif (-not $Log) { throw "-Log is required (or use -Kind files with -Dir)" }
 $data = if ($env:CLAUDE_PROGRESS_DATA) { $env:CLAUDE_PROGRESS_DATA } else { Join-Path $env:LOCALAPPDATA "ClaudeProgressBar" }
 $dir = Join-Path $data "jobs"; New-Item -ItemType Directory -Force $dir | Out-Null
 $job = @{ kind = $Kind; name = $Name; log = $Log; total = $Total; stall = $StallSeconds; started = [DateTimeOffset]::Now.ToUnixTimeMilliseconds() / 1000 }
+if ($Kind -eq "files") { $job.pattern = $Pattern; $job.first = $First; $job.last = $Last; $job.unit = $Unit }
 if ($ProcessId) { $job.pid = $ProcessId }
 if ($Project) { $job.project = $Project }
 $key = ($Name -replace '[^A-Za-z0-9._-]+', '_') + "_" + (Get-Date -Format "HHmmss")   # start time: a re-run of the same job gets its own id

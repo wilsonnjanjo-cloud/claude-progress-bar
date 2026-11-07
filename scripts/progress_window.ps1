@@ -161,12 +161,58 @@ function Test-AgentWaiting($log) {
 
 function Fmt-Age($sec) { if ($sec -lt 90) { "{0:0}s" -f $sec } elseif ($sec -lt 5400) { "{0:0}m" -f ($sec / 60) } else { "{0:0.0}h" -f ($sec / 3600) } }
 
+function Get-PatternRegex($pattern) {
+  # file pattern with #### for the number ("f_####.png"); same rules as cpb_core.pattern_regex
+  if ($pattern -notmatch '#') { return '^.*?(\d+)\D*$' }
+  $rx = ($pattern -split '(#+)' | ForEach-Object { if ($_ -match '^#+$') { '(\d+)' } else { [regex]::Escape($_).Replace('\*', '.*') } }) -join ''
+  return "^$rx$"
+}
+
+function Get-FilesState($job) {
+  # numbered output files (renders, exports): how many of first..last exist in the folder; same as cpb_core.parse_files
+  $first = [int]$(if ($job.first) { $job.first } else { 1 }); $last = [int]$(if ($job.last) { $job.last } else { 1 })
+  $unit = if ($job.unit) { $job.unit } else { "frames" }
+  $total = [Math]::Max(1, $last - $first + 1)
+  $rx = [regex]::new((Get-PatternRegex ([string]$job.pattern)), 'IgnoreCase')
+  $have = New-Object 'System.Collections.Generic.HashSet[int]'
+  try {
+    foreach ($n in [IO.Directory]::EnumerateFiles([string]$job.log)) {
+      $m = $rx.Match([IO.Path]::GetFileName($n))
+      if ($m.Success) { $k = [int]$m.Groups[1].Value; if ($k -ge $first -and $k -le $last) { [void]$have.Add($k) } }
+    }
+  } catch {}
+  if ($have.Count -ge $total) { return @(100, "$total/$total $unit", "done") }
+  return @([int][Math]::Floor(100 * $have.Count / $total), "$($have.Count)/$total $unit", "run")
+}
+
+function Get-OutputProgress($tail) {
+  # progress printed by a background command (last 3 lines): "42%", "12/48", "12 of 48", Blender "Fra:193"
+  # same as cpb_core.parse_output_progress; returns @(pct, text) or $null
+  $lines = @(($tail -replace "`r", "`n") -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 3)
+  for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+    $l = $lines[$i].Trim()
+    $m = [regex]::Match($l, '(\d{1,3}(?:\.\d+)?)\s*%')
+    if ($m.Success -and [double]$m.Groups[1].Value -le 100) { return @([int][Math]::Floor([double]$m.Groups[1].Value), $l.Substring(0, [Math]::Min(60, $l.Length))) }
+    $m = [regex]::Match($l, '(?<![/\d.])\b(\d+)\s*(?:/|of)\s*(\d+)\b(?![/\d.])')
+    if ($m.Success -and [long]$m.Groups[2].Value -gt 0 -and [long]$m.Groups[1].Value -le [long]$m.Groups[2].Value) {
+      return @([int][Math]::Floor(100 * [long]$m.Groups[1].Value / [long]$m.Groups[2].Value), "$($m.Groups[1].Value)/$($m.Groups[2].Value)")
+    }
+    $m = [regex]::Match($l, '\bFra:\s*(\d+)')
+    if ($m.Success) { return @(-1, "frame $($m.Groups[1].Value)") }
+  }
+  return $null
+}
+
 function Get-State($job, $file) {
   # returns @(pct, text, state); pct -1 = no percentage (marquee); state = run | done | fail
   switch ($job.kind) {
     "shell" {
-      if (Test-Held $job.log $job.started) { return @(-1, "running", "run") } else { return @(100, "finished", "done") }
+      if (-not (Test-Held $job.log $job.started)) { return @(100, "finished", "done") }
+      $shown = Get-OutputProgress (Read-Tail $job.log 4096)
+      if ($shown) { return @($shown[0], $shown[1], "run") }
+      return @(-1, "running", "run")
     }
+    "files" { return Get-FilesState $job }
     "agent" {
       if ($job.state -eq "done") { return @(100, "finished", "done") }
       return @(-1, "working", "run")
@@ -343,7 +389,7 @@ $timer.Add_Tick({
         $state = "fail"; $text = "no result after 11m - session closed or command interrupted"
       } elseif ($job.kind -eq "agent" -and $quiet -gt 3600) {
         $state = "fail"; $text = "no activity for 1h - session closed or agent stuck"
-      } elseif ($job.kind -in "pct", "hf", "ffmpeg" -and -not $job.pid -and $quiet -gt 3600) {
+      } elseif ($job.kind -in "pct", "hf", "ffmpeg", "files" -and -not $job.pid -and $quiet -gt 3600) {
         # a hand-registered job with no process to watch: after an hour of silence, close it quietly
         $state = "closed"; $text = "closed: no progress for 1h"
       } elseif ($quiet -gt $amber -and $why) {
