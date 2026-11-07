@@ -64,7 +64,7 @@ The macOS version is new and **has not been tested on a real Mac yet**. It is a 
 - Stall alarms play a sound and show a macOS notification.
 - There is no menu-bar status icon yet (the Windows tray icon's equivalent).
 
-If you use a Mac, please run `python3 tests/window_smoke_test.py` from this repository and post the output in the [macOS testers issue](https://github.com/wilsonnjanjo-cloud/claude-progress-bar/issues?q=is%3Aissue+macOS+testers). It takes about a minute and does not touch your real data.
+If you use a Mac, please run `python3 tests/window_smoke_test.py` from this repository and post the output in the [macOS testers issue](https://github.com/wilsonnjanjo-cloud/claude-progress-bar/issues/1). It takes about a minute and does not touch your real data.
 
 ## Tracking your own long jobs
 
