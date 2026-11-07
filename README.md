@@ -5,6 +5,7 @@ A small window for **Windows** (and **macOS, in beta**) that shows **one live ba
 - Background shell commands (`run_in_background`, or commands Claude moved to the background)
 - Subagents, named the same way as in Claude Code's Background tasks panel
 - Foreground commands that run longer than 10 seconds
+- Monitor watches (the Background tasks panel's "Stops in 24m" tasks), with a `stops in …` countdown
 - **Counts, automatically:** when Claude starts something that produces countable output, its bar shows how far it has got, for example **18/24 frames** for a render or **37/120 images** for a batch conversion. Nothing to set up: see [Automatic counts](#automatic-counts)
 - Progress that background commands print (`42%`, `12/48`, Blender's `Fra:193`) is shown on their bar automatically
 - Long jobs you register yourself (renders, ffmpeg, scripts) with a real percentage
@@ -22,6 +23,8 @@ A small window for **Windows** (and **macOS, in beta**) that shows **one live ba
 | Failed, or the process died | dark red | |
 | Closed after 1 h with no progress (no process to check) | grey | |
 | Nothing running (still listening) | window hidden | grey |
+
+Each row shows the task name on the left (shortened to fit) and, always fully visible on the right, its count, percentage, time spent and any warning, for example `18/24 frames · 75% · 12m` or `3m · STALLED 5m`. The title bar adds it all up: `Claude Progress Bar - 3 running, 1 stalled`.
 
 Right-click a row to copy a ready-made message for Claude ("Please check whether this task is still making progress or has stalled: …") or the task's log path, or to dismiss the bar.
 
@@ -146,6 +149,10 @@ Runtime data (task files and an event log) lives in `%LOCALAPPDATA%\ClaudeProgre
 - `pwsh -File tests/windows_alarm_test.ps1`: the same six tasks against the Windows window.
 
 The Windows window implements the stall rules in PowerShell and the macOS window in Python, so a change to the rules must keep both passing.
+
+## Updates
+
+Turn on auto-update once and new versions arrive by themselves: in Claude Code run `/plugin`, open **Marketplaces**, choose **claude-progress-bar** and **Enable auto-update**. Claude Code then installs new versions in the background; after `/reload-plugins` or in a new session, the next task replaces the running window with the new version on its own (it never downgrades). You can also update by hand with `/plugin update claude-progress-bar@claude-progress-bar`.
 
 ## Uninstall
 

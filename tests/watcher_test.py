@@ -18,7 +18,7 @@ open(os.path.join(DATA, "window.heartbeat"), "w").write("x")   # pretend a windo
 env = dict(os.environ, CLAUDE_PROGRESS_DATA=DATA)
 
 # project 1: a render that writes frames 241-264 into frames/ (240 older frames already there), plus logs
-p1 = os.path.join(T, "table_scene")
+p1 = os.path.join(T, "demo_scene")
 os.makedirs(os.path.join(p1, "frames"))
 os.makedirs(os.path.join(p1, "logs"))
 for i in range(1, 241):

@@ -54,7 +54,7 @@ check("blender output pattern", c.blender_output_pattern("//out/f_", "/p")[1], "
 t0 = 1000.0
 listing = {"/p/frames": [("f_%04d.png" % i, 900.0) for i in range(1, 241)] + [("f_%04d.png" % i, 1010.0) for i in range(241, 259)],
            "/p/logs": [("gpu.log", 1012.0), ("cpu1.log", 1012.0)],
-           "/p": [("table_scene.blend", 500.0)]}
+           "/p": [("demo_scene.blend", 500.0)]}
 check("finds the frames folder", c.pick_output(listing, t0, (241, 264)), ("/p/frames", "f_####.png", True))
 check("count frames found", c.parse_files([n for n, _ in listing["/p/frames"]], "f_####.png", 241, 264), (75, "18/24 frames", "run"))
 batch = {"/w/out": [("photo_a.jpg", 1005.0), ("photo_b.jpg", 1006.0), ("photo_c.jpg", 1007.0)], "/w": [("run.log", 1008.0)]}
