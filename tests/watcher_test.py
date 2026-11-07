@@ -24,8 +24,15 @@ os.makedirs(os.path.join(p1, "logs"))
 for i in range(1, 241):
     open(os.path.join(p1, "frames", "f_%04d.png" % i), "w").close()
     os.utime(os.path.join(p1, "frames", "f_%04d.png" % i), (time.time() - 3600,) * 2)
+# like the real render command of 2026-11-08: a timestamp file is written first (an older t1.txt exists), then
+# Blender takes ~6 s before its first frame, and each frame starts as an empty placeholder
+open(os.path.join(p1, "logs", "t1.txt"), "w").write("1700000000\n")
+os.utime(os.path.join(p1, "logs", "t1.txt"), (time.time() - 7200,) * 2)
 render = ("import time,os\n"
+          "open(os.path.join('logs','t0.txt'),'w').write(str(int(time.time())))\n"
+          "time.sleep(6)\n"
           "for n in range(241, 265):\n"
+          "    open(os.path.join('frames','f_%04d.png' % n),'w').close()\n"
           "    open(os.path.join('logs','gpu.log'),'a').write('Fra:%d\\n' % n)\n"
           "    open(os.path.join('frames','f_%04d.png' % n),'w').write('x'); time.sleep(0.5)\n")
 open(os.path.join(p1, "fake_render.py"), "w").write(render)
