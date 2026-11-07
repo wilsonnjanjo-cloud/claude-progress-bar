@@ -33,6 +33,12 @@ check("files: all present is done", c.parse_files(frames + ["f_%04d.png" % i for
 check("files: none yet", c.parse_files([], "f_####.png", 193, 240), (0, "0/48 frames", "run"))
 check("files: case-insensitive, own unit", c.parse_files(["SHOT_007.PNG"], "shot_###.png", 1, 10, "images"), (10, "1/10 images", "run"))
 
+# --- the short right-hand status of a row
+check("status: count, percent, time", c.status_line("18/24 frames", 75, "run", 720), "18/24 frames  ·  75%  ·  12m")
+check("status: generic word dropped", c.status_line("running", -1, "run", 180, "quiet 2m"), "3m  ·  quiet 2m")
+check("status: new files, no total", c.status_line("7 new clips", -1, "run", 95), "7 new clips  ·  1m")
+check("status: long text shortened", len(c.status_line("x" * 60, -1, "run", 5).split("  ")[0]), 28)
+
 # --- recognising countable work from a task (no registration, no Claude rules)
 check("range from description", c.guess_range("Render frames 241-264 with GPU+CPU workers"), (241, 264, "frames"))
 check("range: pages 1 to 40", c.guess_range("Export pages 1 to 40 as PNG"), (1, 40, "pages"))

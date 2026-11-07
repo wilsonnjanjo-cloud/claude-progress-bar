@@ -40,7 +40,29 @@ def run(case, version, record):
     return replaced
 
 
+def run_same_folder(case, recorded):
+    """The window runs from the hook's own folder (local install updated in place) but recorded an older version."""
+    shutil.rmtree(T, ignore_errors=True)
+    data = os.path.join(T, "data")
+    os.makedirs(os.path.join(data, "jobs"))
+    here = os.path.join(REPO, "scripts")
+    fake = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)", os.path.join(here, NAME)])
+    json.dump({"pid": fake.pid, "dir": here, "version": recorded}, open(os.path.join(data, "window.code"), "w"))
+    open(os.path.join(data, "window.heartbeat"), "w").write("x")
+    payload = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Read", "session_id": "upg", "cwd": "x"})
+    subprocess.run([sys.executable, os.path.join(here, "hook.py")], input=payload, text=True,
+                   env=dict(os.environ, CLAUDE_PROGRESS_DATA=data), timeout=90)
+    time.sleep(2)
+    replaced = fake.poll() is not None
+    if not replaced:
+        fake.kill()
+    print("%-46s replaced: %s" % (case, replaced))
+    return replaced
+
+
 results = [
+    run_same_folder("same folder, recorded 0.0.1 (updated in place)", "0.0.1") is True,
+    run_same_folder("same folder, recorded 99.0.0", "99.0.0") is False,
     run("older 1.0.0, recorded in window.code", "1.0.0", True) is True,
     run("older 1.3.0, not recorded (pre-1.3.1 window)", "1.3.0", False) is True,
     run("newer 9.9.9, recorded: never downgrade", "9.9.9", True) is False,

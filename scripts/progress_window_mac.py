@@ -116,7 +116,11 @@ class App:
         self.log("listener started", "pid %d" % os.getpid(), "macos" if plat.MAC else sys.platform)
         try:  # which code this window runs, so a newer installed version can replace it (hook.py upgrade_window)
             with open(os.path.join(data, "window.code"), "w", encoding="utf-8") as f:
-                json.dump({"pid": os.getpid(), "dir": HERE}, f)
+                try:
+                    ver = json.load(open(os.path.join(HERE, "..", ".claude-plugin", "plugin.json"), encoding="utf-8"))["version"]
+                except Exception:
+                    ver = ""
+                json.dump({"pid": os.getpid(), "dir": HERE, "version": ver}, f)
         except OSError:
             pass
         root.after(200, self.tick)
@@ -221,16 +225,35 @@ class App:
         tk, ttk = self.tk, self.ttk
         r = Row(key)
         r.frame = tk.Frame(self.box)
-        r.label = tk.Label(r.frame, text=key, anchor="w", width=70)
-        r.label.pack(fill="x")
+        # task name on the left (shortened to fit), status on the right (always whole)
+        top = tk.Frame(r.frame)
+        top.pack(fill="x")
+        r.status = tk.Label(top, text="", anchor="e")
+        r.status.pack(side="right")
+        r.label = tk.Label(top, text=key, anchor="w")
+        r.label.pack(side="left", fill="x", expand=True)
+        r.top = top
         r.bar = ttk.Progressbar(r.frame, length=530, maximum=100, mode="determinate")
         r.bar.pack(fill="x", pady=(1, 4))
         r.frame.pack(fill="x")
-        for w in (r.frame, r.label, r.bar):
+        for w in (r.frame, r.top, r.label, r.status, r.bar):
             for seq in ("<Button-2>", "<Button-3>", "<Control-Button-1>"):
                 w.bind(seq, lambda e, k=key: self.popup(e, k))
         self.rows[key] = r
         return r
+
+    def set_row_text(self, r, title, status, color):
+        """Status gets the room it needs at the right; the name is cut with an ellipsis to fit the rest."""
+        import tkinter.font as tkfont
+        font = tkfont.nametofont(r.label.cget("font")) if not isinstance(r.label.cget("font"), tuple) else tkfont.Font(font=r.label.cget("font"))
+        room = 540 - font.measure(status) - 24
+        name = title
+        if font.measure(name) > room:
+            while name and font.measure(name + "\u2026") > room:
+                name = name[:-1]
+            name = name.rstrip() + "\u2026"
+        r.status.configure(text=status, fg=color)
+        r.label.configure(text=name, fg=color)
 
     def set_mode(self, r, mode):
         if r.mode == mode:
@@ -395,22 +418,19 @@ class App:
             state = res["state"]
             elapsed = core.fmt_age(now - started)
             if state == "run":
-                note = ("   ·  " + res["text"]) if res["text"] else ""
                 if pct < 0:
                     self.set_mode(r, "indeterminate")
-                    r.label.configure(text="%s   ·  %s  ·  %s%s" % (title, text, elapsed, note))
                 else:
                     self.set_mode(r, "determinate")
                     r.bar["value"] = max(0, min(100, pct))
-                    r.label.configure(text="%s   %d%%  ·  %s  ·  %s%s" % (title, pct, text, elapsed, note))
                 r.level = res["level"]
-                r.label.configure(fg=self.COLORS.get(res["level"], "black"))
+                self.set_row_text(r, title, core.status_line(text, pct, state, now - started, res["text"]),
+                                  self.COLORS.get(res["level"], "black"))
             else:
                 r.ended = now
                 self.set_mode(r, "determinate")
                 r.bar["value"] = 100
-                r.label.configure(text="%s   ·  %s  ·  %s" % (title, res["text"] or text, elapsed),
-                                  fg=self.COLORS.get(state, "black"))
+                self.set_row_text(r, title, "%s  \u00b7  %s" % (res["text"] or text, elapsed), self.COLORS.get(state, "black"))
                 self.remove_file(path)
         for k in list(self.rows):
             if self.rows[k].ended and now - self.rows[k].ended > 5:

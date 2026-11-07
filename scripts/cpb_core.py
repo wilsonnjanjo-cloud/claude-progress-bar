@@ -340,19 +340,36 @@ def judge(w, job, state, now, started, log_time, cpu_seconds=None, pid_alive=Non
     elif kind in ("pct", "hf", "ffmpeg", "files") and not job.get("pid") and quiet > MANUAL_MAX_QUIET:
         out["state"], out["text"] = "closed", "closed: no progress for 1h"
     elif quiet > amber and why:
-        out["level"], out["text"] = "quiet", "%s, quiet %s" % (why, fmt_age(quiet))
+        out["level"], out["text"] = "quiet", "quiet %s" % fmt_age(quiet)   # healthy silence (why): no colour
         w.alerted = False
     elif quiet > red:
-        out["level"], out["text"] = "red", "STALLED [no activity for %s]" % fmt_age(quiet)
+        out["level"], out["text"] = "red", "STALLED %s" % fmt_age(quiet)
         if not w.alerted:
             w.alerted = True
             out["alert"] = True
     elif quiet > amber:
-        out["level"], out["text"] = "amber", "[no activity for %s]" % fmt_age(quiet)
+        out["level"], out["text"] = "amber", "quiet %s" % fmt_age(quiet)
         w.alerted = False
     else:
         w.alerted = False
     return out
+
+
+GENERIC = {"running", "working", "starting", "running (foreground)"}
+
+
+def status_line(text, pct, state, elapsed_s, note=None):
+    """Right-hand status of a row, kept short and always shown whole: count, percentage, time spent, warning.
+    Generic words ("running", "working") are left out: the moving bar already says that. Same as Windows."""
+    parts = []
+    if text and text not in GENERIC:
+        parts.append(text if len(text) <= 28 else text[:27] + "\u2026")
+    if pct >= 0 and state == "run" and not (text or "").startswith("%d%%" % pct):
+        parts.append("%d%%" % pct)
+    parts.append(fmt_age(elapsed_s))
+    if note:
+        parts.append(note)
+    return "  \u00b7  ".join(parts)
 
 
 def details_line(title, key):

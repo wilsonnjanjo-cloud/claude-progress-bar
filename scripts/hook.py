@@ -131,7 +131,16 @@ def upgrade_window():
         info, running_dir = None, ""
     if info:
         if os.path.normcase(os.path.abspath(running_dir)) == os.path.normcase(HERE):
-            return   # the usual case: this version's window is running
+            # same folder: current unless the folder was updated in place (local install) since the window started
+            rec = tuple(int(x) for x in re.findall(r"\d+", str(info.get("version") or ""))[:3])
+            if not rec or rec >= mine:
+                return
+            pid = int(info.get("pid") or 0)
+            if not any(p == pid for p, _ in window_processes()):
+                return   # recorded window is gone; nothing to replace
+            log_event("window upgrade", "%s -> %s (same folder)" % (".".join(map(str, rec)), ".".join(map(str, mine))))
+            replace_window(pid)
+            return
         theirs = code_version(running_dir)
         if theirs and mine <= theirs:
             return   # an older hook never downgrades the window
@@ -155,6 +164,11 @@ def upgrade_window():
     pid, running_dir = old[0]
     theirs = code_version(running_dir)
     log_event("window upgrade", "%s -> %s" % (".".join(map(str, theirs or ())) or "?", ".".join(map(str, mine))))
+    replace_window(pid)
+
+
+def replace_window(pid):
+    """Close the running window (an older version) and start this version's."""
     try:
         if WIN:
             subprocess.run(["taskkill", "/PID", str(pid), "/F"], creationflags=NO_WINDOW, capture_output=True, timeout=10)

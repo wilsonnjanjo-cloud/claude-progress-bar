@@ -318,14 +318,30 @@ $miDismiss.Add_Click({
   try { Add-Content $EventLog ("{0} bar dismissed by user | {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $k) } catch {}
 })
 
+$RowFont = New-Object System.Drawing.Font("Segoe UI", 10.5)
 function New-Row($name) {
   $p = New-Object System.Windows.Forms.Panel; $p.Width = 530; $p.Height = 44; $p.Tag = [string]$name
-  $lab = New-Object System.Windows.Forms.Label; $lab.Left = 4; $lab.Top = 2; $lab.Width = 520; $lab.Height = 24; $lab.Font = New-Object System.Drawing.Font("Segoe UI", 10.5)
+  # two labels: the task name on the left (shortened with "…" to fit), the status on the right (always whole)
+  $lab = New-Object System.Windows.Forms.Label; $lab.Left = 4; $lab.Top = 2; $lab.Width = 520; $lab.Height = 24; $lab.Font = $RowFont
   $lab.AutoEllipsis = $true
+  $st = New-Object System.Windows.Forms.Label; $st.Top = 2; $st.Height = 24; $st.Font = $RowFont; $st.TextAlign = "TopRight"; $st.Left = 524; $st.Width = 0
+  $st.ContextMenuStrip = $menu; $p.Controls.Add($st)
   $bar = New-Object System.Windows.Forms.ProgressBar; $bar.Left = 4; $bar.Top = 27; $bar.Width = 520; $bar.Height = 12; $bar.Style = "Continuous"
   $p.ContextMenuStrip = $menu; $lab.ContextMenuStrip = $menu; $bar.ContextMenuStrip = $menu   # right-click: copy details
   $p.Controls.Add($lab); $p.Controls.Add($bar); $flow.Controls.Add($p)
-  return @{ panel = $p; label = $lab; bar = $bar; ended = $null; name = $name }
+  return @{ panel = $p; label = $lab; status = $st; bar = $bar; ended = $null; name = $name }
+}
+
+function Set-RowText($r, $title, $status, $color) {
+  # status gets the width it needs at the right edge; the name gets the rest
+  $w = [System.Windows.Forms.TextRenderer]::MeasureText($status, $RowFont).Width + 4
+  $w = [Math]::Min($w, 380)
+  if ($r.status.Text -ne $status) { $r.status.Text = $status }
+  if ($r.status.Width -ne $w) { $r.status.Width = $w; $r.status.Left = 524 - $w }
+  $lw = [Math]::Max(60, 524 - $w - 10)
+  if ($r.label.Width -ne $lw) { $r.label.Width = $lw }
+  if ($r.label.Text -ne $title) { $r.label.Text = $title }
+  $r.label.ForeColor = $color; $r.status.ForeColor = $color
 }
 
 $timer = New-Object System.Windows.Forms.Timer; $timer.Interval = 2000
@@ -415,30 +431,35 @@ $timer.Add_Tick({
         # a hand-registered job with no process to watch: after an hour of silence, close it quietly
         $state = "closed"; $text = "closed: no progress for 1h"
       } elseif ($quiet -gt $amber -and $why) {
-        $extra = "   ·  $why, quiet $(Fmt-Age $quiet)"; $r.alerted = $false
+        $extra = "quiet $(Fmt-Age $quiet)"; $r.alerted = $false   # healthy silence ($why): plain text, no colour
       } elseif ($quiet -gt $red) {
-        $extra = "   ·  STALLED [no activity for $(Fmt-Age $quiet)]"; $color = [System.Drawing.Color]::Red
+        $extra = "STALLED $(Fmt-Age $quiet)"; $color = [System.Drawing.Color]::Red
         if (-not $r.alerted) { $r.alerted = $true; Send-Alert $title }
       } elseif ($quiet -gt $amber) {
-        $extra = "   ·  [no activity for $(Fmt-Age $quiet)]"; $color = [System.Drawing.Color]::DarkOrange
+        $extra = "quiet $(Fmt-Age $quiet)"; $color = [System.Drawing.Color]::DarkOrange
         $r.alerted = $false
       } else { $r.alerted = $false }
     }
+    # right-hand status, always fully visible: the count, the percentage, the time spent, then any warning.
+    # Generic words ("running", "working") are left out: the moving bar already says that.
+    $parts = @()
+    if ($text -and $text -notmatch '^(running|working|starting|running \(foreground\))$') { $parts += $(if ($text.Length -gt 28) { $text.Substring(0, 27) + "…" } else { $text }) }
+    if ($pct -ge 0 -and $state -eq "run" -and $text -notmatch "^$pct%") { $parts += "$pct%" }
+    $parts += (Fmt-Age $elapsed)
+    if ($extra) { $parts += $extra }
     if ($pct -lt 0) {
       if ($r.bar.Style -ne "Marquee") { $r.bar.Style = "Marquee"; $r.bar.MarqueeAnimationSpeed = 40 }
-      $r.label.Text = "{0}   ·  {1}  ·  {2}{3}" -f $title, $text, (Fmt-Age $elapsed), $extra
     } else {
       if ($r.bar.Style -ne "Continuous") { $r.bar.Style = "Continuous" }
       $r.bar.Value = [Math]::Max(0, [Math]::Min(100, $pct))
-      $r.label.Text = "{0}   {1}%  ·  {2}  ·  {3}{4}" -f $title, $pct, $text, (Fmt-Age $elapsed), $extra
     }
-    $r.label.ForeColor = $color
+    Set-RowText $r $title ($parts -join "  ·  ") $color
     if ($state -ne "run") {
       $r.ended = $now
       if ($r.bar.Style -ne "Continuous") { $r.bar.Style = "Continuous" }
       $r.bar.Value = 100
-      $r.label.Text = "{0}   ·  {1}  ·  {2}" -f $title, $text, (Fmt-Age $elapsed)
-      $r.label.ForeColor = if ($state -eq "done") { [System.Drawing.Color]::DarkGreen } elseif ($state -eq "closed") { [System.Drawing.Color]::Gray } else { [System.Drawing.Color]::DarkRed }
+      $endColor = if ($state -eq "done") { [System.Drawing.Color]::DarkGreen } elseif ($state -eq "closed") { [System.Drawing.Color]::Gray } else { [System.Drawing.Color]::DarkRed }
+      Set-RowText $r $title ("{0}  ·  {1}" -f $text, (Fmt-Age $elapsed)) $endColor
       Remove-Item -LiteralPath $f.FullName -ErrorAction SilentlyContinue
     }
   }
@@ -486,7 +507,8 @@ try { [IO.File]::WriteAllText($Heartbeat, (Get-Date -Format o)) } catch {}
 Remove-Item "$Heartbeat.launch" -ErrorAction SilentlyContinue
 try { Add-Content $EventLog ("{0} listener started | pid {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $PID) } catch {}
 # which code this window runs, so a newer installed version can replace it (hook.py upgrade_window)
-try { @{ pid = $PID; dir = $PSScriptRoot } | ConvertTo-Json -Compress | Set-Content -Encoding utf8 (Join-Path $DataDir "window.code") } catch {}
+$myVersion = try { (Get-Content (Join-Path $PSScriptRoot "..\.claude-plugin\plugin.json") -Raw | ConvertFrom-Json).version } catch { "" }
+try { @{ pid = $PID; dir = $PSScriptRoot; version = $myVersion } | ConvertTo-Json -Compress | Set-Content -Encoding utf8 (Join-Path $DataDir "window.code") } catch {}
 # message loop without a main form: the window shows and hides itself; the process lives until Exit or logoff
 [System.Windows.Forms.Application]::Run()
 $tray.Dispose()
