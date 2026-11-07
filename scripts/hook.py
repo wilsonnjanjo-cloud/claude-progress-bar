@@ -291,7 +291,8 @@ def scan(root, extra_dirs=(), max_dirs=400):
             entries = []
             for name in files[:5000]:
                 try:
-                    entries.append((name, os.path.getmtime(os.path.join(folder, name))))
+                    st = os.stat(os.path.join(folder, name))
+                    entries.append((name, st.st_mtime, st.st_size))
                 except OSError:
                     pass
             if entries:
@@ -302,9 +303,10 @@ def scan(root, extra_dirs=(), max_dirs=400):
 
 
 def watch_output(job_path):
-    """Runs detached for one task. Looks every few seconds for countable output the task is producing (numbered
-    frames, or a batch of new files) and records it on the task's job: the windows then show "18/24 frames" or
-    "37/120 images" on that task's bar. Ends when the output is found, the task ends, or after 2 hours."""
+    """Runs detached for one task. Looks for countable output the task is producing (numbered frames, or a batch of
+    new files) and records it on the task's job: the windows then show "18/24 frames" or "37/120 images" on that
+    task's bar. Keeps checking while the task runs (every 4 s until something is found, then every 15 s) and
+    switches to a clearly better candidate. Ends with the task, or after 2 hours."""
     import cpb_core as core
     t0 = time.time()
     try:
@@ -328,28 +330,50 @@ def watch_output(job_path):
         out = core.blender_output_pattern(b["output"], os.path.dirname(os.path.join(root or "", blend)) if blend else root)
         if out:
             extra.append(out[0])
+    current = None   # (folder, pattern) recorded on the job
+    current_score = 0
+    COUNT_KEYS = ("out_dir", "pattern", "first", "last", "total", "unit", "count_since")
     while time.time() - t0 < WATCH_MAX_S:
         try:
             job = json.load(open(job_path, encoding="utf-8"))
         except Exception:
             return   # the task ended and its bar was closed
-        if job.get("state") in ("done", "fail", "gone") or job.get("pattern"):
+        if job.get("state") in ("done", "fail", "gone"):
             return
-        hit = core.pick_output(scan(root, extra), started, rng[:2] if rng else None)
-        if hit:
-            folder, pattern, numbered = hit
+        listing = scan(root, extra)
+        hit = core.pick_output(listing, started, rng[:2] if rng else None)
+        # keep looking for the whole task: switch only to a clearly better candidate (real frames over a stray file)
+        if hit and (hit[0], hit[1]) != current and hit[3] > current_score * 2:
+            folder, pattern, numbered, score = hit
             fields = {"out_dir": folder, "pattern": pattern}
             if numbered and rng:
                 fields.update(first=rng[0], last=rng[1], unit=rng[2])
+                # every frame of the range already finished before the task started: a re-render, so count only
+                # frames written from now on (otherwise the bar reads 24/24 at the start)
+                entries = listing.get(folder, [])
+                pct_all, _ = core.count_range(entries, pattern, rng[0], rng[1], rng[2])
+                pct_new, _ = core.count_range(entries, pattern, rng[0], rng[1], rng[2], since=started)
+                if pct_all == 100 and pct_new < 100:
+                    fields["count_since"] = started
             elif count:
                 fields.update(total=count[0], unit=count[1])
             else:
                 fields["unit"] = rng[2] if rng else ("frames" if numbered and re.search(r"\.(png|exr|jpe?g|tiff?|\*)$", pattern, re.I) else "files")
-            key = os.path.basename(job_path)[:-4]
-            write_job(key, fields)
-            log_event("output found", key, folder, pattern, fields.get("unit"))
-            return
-        time.sleep(WATCH_EVERY_S)
+            # replace the previous choice completely (no stale range or total left behind)
+            try:
+                job = json.load(open(job_path, encoding="utf-8"))
+                for k in COUNT_KEYS:
+                    job.pop(k, None)
+                job.update(fields)
+                tmp = job_path + ".tmp"
+                json.dump(job, open(tmp, "w", encoding="utf-8"))
+                os.replace(tmp, job_path)
+            except Exception:
+                return
+            log_event("output found" if current is None else "output switched", os.path.basename(job_path)[:-4],
+                      folder, pattern, fields.get("unit"))
+            current, current_score = (folder, pattern), score
+        time.sleep(WATCH_EVERY_S if current is None else 15)
 
 
 def launch_if_running(job_path):

@@ -27,10 +27,16 @@ Check "files: case-insensitive, own unit" (Get-FilesState ([pscustomobject]@{ lo
 # output found by the hook's watcher, counted on the task's own bar
 $t0 = [DateTimeOffset]::Now.ToUnixTimeMilliseconds() / 1000
 $fr = Join-Path $dir "frames"; New-Item -ItemType Directory -Force $fr | Out-Null
-1..258 | ForEach-Object { New-Item -ItemType File (Join-Path $fr ("f_{0:D4}.png" -f $_)) | Out-Null }
+1..258 | ForEach-Object { Set-Content (Join-Path $fr ("f_{0:D4}.png" -f $_)) "x" }
 Check "counted: frames in range" (Get-CountedOutput ([pscustomobject]@{ out_dir = $fr; pattern = "f_####.png"; first = 241; last = 264; unit = "frames"; started = $t0 })) @(75, "18/24 frames")
+New-Item -ItemType File (Join-Path $fr "f_0259.png") | Out-Null   # Blender's empty placeholder: still rendering
+Check "counted: empty placeholder is not finished" (Get-CountedOutput ([pscustomobject]@{ out_dir = $fr; pattern = "f_####.png"; first = 241; last = 264; unit = "frames"; started = $t0 })) @(75, "18/24 frames")
+# re-render over frames that already existed: only frames written since count_since
+241..258 | ForEach-Object { (Get-Item (Join-Path $fr ("f_{0:D4}.png" -f $_))).LastWriteTime = (Get-Date).AddHours(-1) }
+Set-Content (Join-Path $fr "f_0241.png") "y"
+Check "counted: re-render counts only new frames" (Get-CountedOutput ([pscustomobject]@{ out_dir = $fr; pattern = "f_####.png"; first = 241; last = 264; unit = "frames"; started = $t0; count_since = $t0 })) @(4, "1/24 frames")
 $out = Join-Path $dir "out"; New-Item -ItemType Directory -Force $out | Out-Null
-"a", "b", "c" | ForEach-Object { New-Item -ItemType File (Join-Path $out "photo_$_.jpg") | Out-Null }
+"a", "b", "c" | ForEach-Object { Set-Content (Join-Path $out "photo_$_.jpg") "x" }
 Check "counted: new files vs total" (Get-CountedOutput ([pscustomobject]@{ out_dir = $out; pattern = "*.jpg"; total = 120; unit = "images"; started = $t0 })) @(2, "3/120 images")
 Check "counted: new files, no total" (Get-CountedOutput ([pscustomobject]@{ out_dir = $out; pattern = "*.jpg"; unit = "images"; started = $t0 })) @(-1, "3 new images")
 Check "counted: shell task shows the count" (Get-State ([pscustomobject]@{ kind = "fg"; state = "run"; out_dir = $out; pattern = "*.jpg"; total = 120; unit = "images"; started = $t0 }) $null) @(2, "3/120 images", "run")

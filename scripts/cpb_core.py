@@ -97,11 +97,42 @@ def parse_files(names, pattern, first, last, unit="frames"):
     return int(100 * done / total), "%d/%d %s" % (done, total, unit), "run"
 
 
-def count_new_files(entries, pattern, since, unit="files", total=None):
-    """Files matching `pattern` written since `since` (entries = [(name, mtime)]). With a known total:
-    "37/120 images" and a percentage; without: "37 new images" (pct -1). Returns (pct, text, state)."""
+def _entry(e):
+    """(name, mtime) or (name, mtime, size) -> (name, mtime, size); size unknown counts as non-empty."""
+    return (e[0], e[1], e[2] if len(e) > 2 else 1)
+
+
+def count_range(entries, pattern, first, last, unit="frames", since=None):
+    """Automatic count of a numbered sequence (entries = [(name, mtime, size)]): finished files numbered first..last.
+    Empty files are not finished (Blender writes an empty placeholder when it starts a frame). With `since`, only
+    files written since then count (a re-render over frames that already existed). Returns (pct, text)."""
     rx = pattern_regex(pattern)
-    n = sum(1 for name, mt in entries if mt >= since - 1 and rx.match(name))
+    first, last = int(first), int(last)
+    total = max(1, last - first + 1)
+    have = set()
+    for e in entries:
+        name, mt, size = _entry(e)
+        m = rx.match(name)
+        if m and m.groups() and size > 0 and (since is None or mt >= since - 1):
+            k = int(m.group(1))
+            if first <= k <= last:
+                have.add(k)
+    done = min(len(have), total)
+    return int(100 * done / total), "%d/%d %s" % (done, total, unit)
+
+
+def newest_match(entries, pattern):
+    """Latest mtime among files matching `pattern`: activity is files being written or updated, which a folder's own
+    timestamp does not show (it only changes when files are added or removed)."""
+    rx = pattern_regex(pattern)
+    return max((_entry(e)[1] for e in entries if rx.match(_entry(e)[0])), default=None)
+
+
+def count_new_files(entries, pattern, since, unit="files", total=None):
+    """Non-empty files matching `pattern` written since `since` (entries = [(name, mtime[, size])]). With a known
+    total: "37/120 images" and a percentage; without: "37 new images" (pct -1). Returns (pct, text, state)."""
+    rx = pattern_regex(pattern)
+    n = sum(1 for e in map(_entry, entries) if e[1] >= since - 1 and e[2] > 0 and rx.match(e[0]))
     if total:
         return min(100, int(100 * n / total)), "%d/%d %s" % (min(n, total), total, unit), "run"
     return -1, "%d new %s" % (n, unit), "run"
@@ -184,16 +215,25 @@ def numbered_signature(name):
     return m.group(1) + "#" * len(m.group(2)) + m.group(3), int(m.group(2))
 
 
+TEXT_EXTS = {"*.txt", "*.csv", "*.json", "*.md", "*.xml", "*.yaml", "*.yml", "*.ini", "*.cfg", "*.html"}
+SCRIPT_EXTS = {"*.py", "*.ps1", "*.sh", "*.bat", "*.cmd", "*.js", "*.ts", "*.vbs", "*.blend1"}
+
+
 def pick_output(listing, since, rng=None):
-    """Where a task is producing countable output. listing = {folder: [(name, mtime), ...]}.
-    Prefers a numbered sequence (f_0193.png ...) with files in the range or written since the task started; otherwise
-    a folder where at least 2 files of one type have been written since the start ("*.png").
-    Returns (folder, pattern, numbered) or None."""
+    """Where a task is producing countable output. listing = {folder: [(name, mtime[, size]), ...]}.
+    Returns (folder, pattern, numbered, score) of the best candidate, or None. Only real output counts (non-empty
+    files), and one file is never enough: a command that writes a single timestamp or log file first must not be
+    mistaken for the work. Candidates:
+      - a numbered sequence (f_0265.png ...) with at least 2 files written since the task started, or (when the frame
+        range is known) at least 1 finished file in that range;
+      - otherwise a batch: at least 2 new files of one type in a folder ("*.webp").
+    The watcher calls this again later and switches to a better candidate if one appears."""
     best, best_score = None, 0
     for folder, entries in listing.items():
         groups = {}
-        for name, mt in entries:
-            if NOISE.search(name):
+        for e in entries:
+            name, mt, size = _entry(e)
+            if NOISE.search(name) or size <= 0:
                 continue
             sig = numbered_signature(name)
             new = mt >= since - 1
@@ -209,17 +249,17 @@ def pick_output(listing, since, rng=None):
                 g[1] += 1
         for (pattern, numbered), (total, new, in_range) in groups.items():
             if numbered:
-                if total < 2 and not new:
-                    continue   # a lone numbered file is not a sequence
-                if not (new or in_range):
-                    continue
-                score = 100000 + new * 1000 + in_range * 10 + total
+                if new < 2 and not in_range:
+                    continue   # not a sequence being produced (yet)
+                score = 100000 + in_range * 10000 + new * 100 + min(total, 99)
             else:
-                if new < 2:
-                    continue   # one new file is not a batch
+                # one new file is not a batch; tasks often write a few small text/data files while they work
+                # (timestamps, progress logs, settings), so those need a bigger batch, and scripts never count
+                if pattern in SCRIPT_EXTS or new < (5 if pattern in TEXT_EXTS else 2):
+                    continue
                 score = new
             if score > best_score:
-                best, best_score = (folder, pattern, numbered), score
+                best, best_score = (folder, pattern, numbered, score), score
     return best
 
 

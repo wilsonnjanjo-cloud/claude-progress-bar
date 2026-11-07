@@ -55,10 +55,25 @@ t0 = 1000.0
 listing = {"/p/frames": [("f_%04d.png" % i, 900.0) for i in range(1, 241)] + [("f_%04d.png" % i, 1010.0) for i in range(241, 259)],
            "/p/logs": [("gpu.log", 1012.0), ("cpu1.log", 1012.0)],
            "/p": [("demo_scene.blend", 500.0)]}
-check("finds the frames folder", c.pick_output(listing, t0, (241, 264)), ("/p/frames", "f_####.png", True))
+check("finds the frames folder", c.pick_output(listing, t0, (241, 264))[:3], ("/p/frames", "f_####.png", True))
 check("count frames found", c.parse_files([n for n, _ in listing["/p/frames"]], "f_####.png", 241, 264), (75, "18/24 frames", "run"))
 batch = {"/w/out": [("photo_a.jpg", 1005.0), ("photo_b.jpg", 1006.0), ("photo_c.jpg", 1007.0)], "/w": [("run.log", 1008.0)]}
-check("finds a batch of new files", c.pick_output(batch, t0), ("/w/out", "*.jpg", False))
+check("finds a batch of new files", c.pick_output(batch, t0)[:3], ("/w/out", "*.jpg", False))
+
+# the real case of 2026-11-08: the render command writes logs/t0.txt before Blender saves its first frame
+early = {"/p/logs": [("t0.txt", 1001.0, 11), ("t1.txt", 500.0, 11), ("gpu.log", 1002.0, 900), ("progress.txt", 1003.0, 40)],
+         "/p/frames": [("f_%04d.png" % i, 900.0, 5000) for i in range(1, 265)]}
+check("a timestamp file is not the work", c.pick_output(early, t0, (265, 288)), None)
+check("a timestamp file is not the work (no range)", c.pick_output(early, t0), None)
+early["/p/frames"].append(("f_0265.png", 1030.0, 5000))
+check("first finished frame in range: the frames folder", c.pick_output(early, t0, (265, 288))[:3], ("/p/frames", "f_####.png", True))
+frames = early["/p/frames"] + [("f_0266.png", 1031.0, 0)]   # Blender's empty placeholder: still rendering
+check("an empty placeholder is not a finished frame", c.count_range(frames, "f_####.png", 265, 288), (4, "1/24 frames"))
+rerender = [("f_%04d.png" % i, 900.0, 5000) for i in range(265, 289)] + [("f_0265.png", 1040.0, 5000)]
+check("re-render over existing frames: count only new ones",
+      c.count_range([e for e in rerender if not (e[0] == "f_0265.png" and e[1] == 900.0)], "f_####.png", 265, 288, since=t0), (4, "1/24 frames"))
+check("activity = newest matching file", c.newest_match([("a_0001.png", 10.0, 1), ("a_0002.png", 30.0, 1), ("x.log", 99.0, 1)], "a_####.png"), 30.0)
+check("empty new files are not a batch", c.pick_output({"/w": [("a.png", 1005.0, 0), ("b.png", 1006.0, 0)]}, t0), None)
 check("count new files vs planned total", c.count_new_files(batch["/w/out"], "*.jpg", t0, "images", 120), (2, "3/120 images", "run"))
 check("count new files, no total", c.count_new_files(batch["/w/out"], "*.jpg", t0, "images"), (-1, "3 new images", "run"))
 check("logs alone are not output", c.pick_output({"/w": [("a.log", 1005.0), ("b.log", 1006.0)]}, t0), None)

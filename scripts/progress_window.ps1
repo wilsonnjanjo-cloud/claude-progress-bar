@@ -206,14 +206,27 @@ function Get-CountedOutput($job) {
   # (pct, text) from the output the hook's watcher found for a Claude task (out_dir + pattern), or $null.
   # Same as App.counted_output in progress_window_mac.py.
   if (-not $job.out_dir -or -not $job.pattern -or -not (Test-Path -LiteralPath $job.out_dir)) { return $null }
+  $rx = [regex]::new((Get-PatternRegex ([string]$job.pattern)), 'IgnoreCase')
   if ($null -ne $job.first -and $null -ne $job.last) {
-    $s = Get-FilesState ([pscustomobject]@{ log = $job.out_dir; pattern = $job.pattern; first = $job.first; last = $job.last; unit = $(if ($job.unit) { $job.unit } else { "frames" }) })
-    return @($s[0], $s[1])
+    # finished frames in the range: non-empty files (Blender's empty placeholder is a frame still rendering), and only
+    # those written since count_since when the watcher saw a re-render over frames that already existed
+    $first = [int]$job.first; $last = [int]$job.last; $total = [Math]::Max(1, $last - $first + 1)
+    $cs = if ($job.count_since) { [DateTimeOffset]::FromUnixTimeMilliseconds([long](([double]$job.count_since - 1) * 1000)).LocalDateTime } else { [datetime]::MinValue }
+    $have = New-Object 'System.Collections.Generic.HashSet[int]'
+    try {
+      foreach ($f in [IO.DirectoryInfo]::new([string]$job.out_dir).EnumerateFiles()) {
+        $m = $rx.Match($f.Name)
+        if ($m.Success -and $m.Groups.Count -gt 1 -and $f.Length -gt 0 -and $f.LastWriteTime -ge $cs) {
+          $k = [int]$m.Groups[1].Value; if ($k -ge $first -and $k -le $last) { [void]$have.Add($k) }
+        }
+      }
+    } catch {}
+    $done = [Math]::Min($have.Count, $total); $unit = if ($job.unit) { $job.unit } else { "frames" }
+    return @([int][Math]::Floor(100 * $done / $total), "$done/$total $unit")
   }
   $since = [DateTimeOffset]::FromUnixTimeMilliseconds([long](([double]$job.started - 1) * 1000)).LocalDateTime
-  $rx = [regex]::new((Get-PatternRegex ([string]$job.pattern)), 'IgnoreCase')
   $n = 0
-  try { foreach ($f in [IO.DirectoryInfo]::new([string]$job.out_dir).EnumerateFiles()) { if ($f.LastWriteTime -ge $since -and $rx.IsMatch($f.Name)) { $n++ } } } catch {}
+  try { foreach ($f in [IO.DirectoryInfo]::new([string]$job.out_dir).EnumerateFiles()) { if ($f.LastWriteTime -ge $since -and $f.Length -gt 0 -and $rx.IsMatch($f.Name)) { $n++ } } } catch {}
   $unit = if ($job.unit) { $job.unit } else { "files" }
   if ($job.total) { $t = [int]$job.total; return @([Math]::Min(100, [int][Math]::Floor(100 * $n / $t)), "$([Math]::Min($n, $t))/$t $unit") }
   return @(-1, "$n new $unit")
@@ -395,7 +408,11 @@ $timer.Add_Tick({
     $r.job = $job; $r.startedAt = $started   # kept for "Copy details" (the job file is deleted when the job ends)
     $logTime = if ($job.log -and (Test-Path -LiteralPath $job.log)) { (Get-Item -LiteralPath $job.log).LastWriteTime } else { $started }
     # activity also counts new files landing in the output folder the hook's watcher found for this task
-    if ($job.out_dir -and (Test-Path -LiteralPath $job.out_dir)) { $od = (Get-Item -LiteralPath $job.out_dir).LastWriteTime; if ($od -gt $logTime) { $logTime = $od } }
+    # (the newest matching file, not the folder's own time: that only changes when files are added or removed)
+    if ($job.out_dir -and $job.pattern -and (Test-Path -LiteralPath $job.out_dir)) {
+      $orx = [regex]::new((Get-PatternRegex ([string]$job.pattern)), 'IgnoreCase')
+      try { foreach ($of in [IO.DirectoryInfo]::new([string]$job.out_dir).EnumerateFiles()) { if ($of.LastWriteTime -gt $logTime -and $orx.IsMatch($of.Name)) { $logTime = $of.LastWriteTime } } } catch {}
+    }
     $quiet = ($now - $logTime).TotalSeconds
     # learn the job's own rhythm: the longest normal gap between log updates seen so far
     if ($r.lastLogTime -and $logTime -gt $r.lastLogTime) {

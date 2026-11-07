@@ -49,6 +49,19 @@ def mtime(path):
         return None
 
 
+def folder_entries(folder):
+    """[(name, mtime, size)] of the files in a folder, or None if it cannot be read."""
+    try:
+        out = []
+        for e in os.scandir(folder):
+            if e.is_file():
+                st = e.stat()
+                out.append((e.name, st.st_mtime, st.st_size))
+        return out
+    except OSError:
+        return None
+
+
 class Row:
     def __init__(self, key):
         self.key = key
@@ -299,14 +312,13 @@ class App:
         folder, pattern = job.get("out_dir"), job.get("pattern")
         if not folder or not pattern:
             return None
-        try:
-            names = os.listdir(folder)
-        except OSError:
+        entries = folder_entries(folder)
+        if entries is None:
             return None
         if job.get("first") is not None and job.get("last") is not None:
-            pct, text, _ = core.parse_files(names, pattern, job["first"], job["last"], job.get("unit") or "frames")
-            return pct, text
-        entries = [(n, mtime(os.path.join(folder, n)) or 0) for n in names]
+            # finished frames only (non-empty), and only new ones after a re-render over existing frames
+            return core.count_range(entries, pattern, job["first"], job["last"], job.get("unit") or "frames",
+                                    since=job.get("count_since"))
         pct, text, _ = core.count_new_files(entries, pattern, started, job.get("unit") or "files", job.get("total"))
         return pct, text
 
@@ -416,7 +428,11 @@ class App:
 
             pct, text, state = self.get_state(job, now, started)
             # activity: its log/output changing, or new files landing in the output folder the watcher found
-            log_time = max(mtime(job.get("log")) or started, mtime(job.get("out_dir")) or 0)
+            # (the newest matching file, not the folder's own time: that only changes when files are added or removed)
+            newest = None
+            if job.get("out_dir") and job.get("pattern"):
+                newest = core.newest_match(folder_entries(job["out_dir"]) or [], job["pattern"])
+            log_time = max(mtime(job.get("log")) or started, newest or 0)
             alive = cpu = None
             if job.get("pid"):
                 alive = plat.pid_alive(job["pid"])
