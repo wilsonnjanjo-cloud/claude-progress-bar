@@ -1,0 +1,14 @@
+{
+  "name": "claude-progress-bar",
+  "owner": {
+    "name": "wilsonnjanjo-cloud"
+  },
+  "description": "Claude Progress Bar: a live progress window for Claude Code background tasks and subagents (Windows).",
+  "plugins": [
+    {
+      "name": "claude-progress-bar",
+      "source": "./",
+      "description": "Live progress window for Claude Code background tasks and subagents (Windows)."
+    }
+  ]
+}

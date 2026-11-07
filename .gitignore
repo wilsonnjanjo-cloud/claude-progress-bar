@@ -1,0 +1,12 @@
+# runtime data never belongs in the repo (it holds session, project and task names)
+*.log
+*.log.old
+*.job
+*.job.tmp
+*.heartbeat
+*.heartbeat.launch
+*.lnk
+*.lnk.target
+jobs/
+__pycache__/
+*.bak*
