@@ -91,19 +91,69 @@ def code_version(code_dir):
         return None
 
 
+def window_processes():
+    """Running progress windows as [(pid, code_dir)], read from process command lines (verifies a recorded pid
+    really is a window, and finds windows from versions before 1.3.1 that did not record themselves)."""
+    out = []
+    try:
+        if WIN:
+            ps = ("Get-CimInstance Win32_Process -Filter \"CommandLine like '%progress_window%'\" | "
+                  "ForEach-Object { \"$($_.ProcessId)|$($_.CommandLine)\" }")
+            r = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps],
+                               creationflags=NO_WINDOW, capture_output=True, text=True, timeout=20)
+            lines = r.stdout.splitlines()
+        else:
+            lines = ["%s|%s" % tuple(l.strip().split(None, 1)) for l in
+                     subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True, timeout=10).stdout.splitlines()
+                     if "progress_window" in l and len(l.strip().split(None, 1)) == 2]
+        for l in lines:
+            pid, _, cmd = l.partition("|")
+            # quoted path (Windows) or unquoted path without spaces (ps output on macOS)
+            m = (re.search(r'"([^"]*)[\\/]progress_window(?:_mac\.py|\.ps1)"', cmd)
+                 or re.search(r'(\S*)[\\/]progress_window(?:_mac\.py|\.ps1)', cmd))
+            if m and pid.strip().isdigit() and "Get-CimInstance" not in cmd:
+                out.append((int(pid), m.group(1)))
+    except Exception:
+        pass
+    return out
+
+
 def upgrade_window():
     """A newer version was installed while an older window is running: close the old one so the new one starts.
     Only ever upgrades (an older hook, e.g. in a session started before the update, never downgrades the window)."""
+    mine = code_version(HERE)
+    if not mine:
+        return
     try:
         info = json.load(open(os.path.join(DATA, "window.code"), encoding="utf-8-sig"))
-        running_dir, pid = info.get("dir"), int(info.get("pid") or 0)
+        running_dir = info.get("dir") or ""
     except Exception:
+        info, running_dir = None, ""
+    if info:
+        if os.path.normcase(os.path.abspath(running_dir)) == os.path.normcase(HERE):
+            return   # the usual case: this version's window is running
+        theirs = code_version(running_dir)
+        if theirs and mine <= theirs:
+            return   # an older hook never downgrades the window
+    else:
+        # no record: either no window, or one from before 1.3.1. Look at the processes, at most every 10 minutes.
+        stamp = os.path.join(DATA, "window.code.checked")
+        try:
+            if time.time() - os.path.getmtime(stamp) < 600:
+                return
+        except OSError:
+            pass
+        try:
+            open(stamp, "w").close()
+        except OSError:
+            return
+    # verify against the running processes before closing anything (a recorded pid may have been reused)
+    old = [(pid, d) for pid, d in window_processes()
+           if os.path.normcase(os.path.abspath(d)) != os.path.normcase(HERE) and (code_version(d) or (0,)) < mine]
+    if not old:
         return
-    if not pid or not running_dir or os.path.normcase(os.path.abspath(running_dir)) == os.path.normcase(HERE):
-        return
-    mine, theirs = code_version(HERE), code_version(running_dir)
-    if not mine or (theirs and mine <= theirs):
-        return
+    pid, running_dir = old[0]
+    theirs = code_version(running_dir)
     log_event("window upgrade", "%s -> %s" % (".".join(map(str, theirs or ())) or "?", ".".join(map(str, mine))))
     try:
         if WIN:
