@@ -87,6 +87,7 @@ $tmExit.Add_Click({ $script:reallyExit = $true; $timer.Stop(); $tray.Visible = $
 function Send-Alert($what) {
   # alert sound + tray balloon + flash the taskbar button until it is looked at; bring the window back
   if (-not $tmMute.Checked) { [System.Media.SystemSounds]::Exclamation.Play() }
+  try { Add-Content $EventLog ("{0} stall alarm | {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $what) } catch {}
   try { $tray.ShowBalloonTip(8000, "Claude task stalled", [string]$what, "Warning") } catch {}
   Show-Bar
   try { [Win.Flash]::Go($form.Handle) } catch {}
@@ -141,6 +142,19 @@ function Test-FgFinished($job) {
     if (-not $tp) { return $false }
   }
   return (Read-Tail $tp 400000).Contains('"tool_use_id":"' + $job.tuid + '"')
+}
+
+function Test-AgentWaiting($log) {
+  # true when the agent's transcript ends on a tool call that has no result yet (it is waiting on that tool, not stuck)
+  if (-not $log -or -not (Test-Path -LiteralPath $log)) { return $false }
+  $lines = @((Read-Tail $log 262144) -split "`r?`n")
+  for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+    $l = $lines[$i]; if (-not $l.Trim()) { continue }
+    try { $o = $l | ConvertFrom-Json -ErrorAction Stop } catch { continue }   # the first line of a tail can be cut off
+    if ($o.type -eq "assistant") { return [bool](@($o.message.content) | Where-Object { $_.type -eq "tool_use" }) }
+    if ($o.type -eq "user") { return $false }
+  }
+  return $false
 }
 
 function Fmt-Age($sec) { if ($sec -lt 90) { "{0:0}s" -f $sec } elseif ($sec -lt 5400) { "{0:0}m" -f ($sec / 60) } else { "{0:0.0}h" -f ($sec / 3600) } }
@@ -289,14 +303,38 @@ $timer.Add_Tick({
     $r.job = $job; $r.startedAt = $started   # kept for "Copy details" (the job file is deleted when the job ends)
     $logTime = if ($job.log -and (Test-Path -LiteralPath $job.log)) { (Get-Item -LiteralPath $job.log).LastWriteTime } else { $started }
     $quiet = ($now - $logTime).TotalSeconds
-    # stall levels: amber after $WarnAfter s of no activity, red (+ sound + taskbar flash, once) after $StallAfter s.
-    # A job may set its own "stall" (seconds to red). A red job stays listed and recovers if activity resumes.
+    # learn the job's own rhythm: the longest normal gap between log updates seen so far
+    if ($r.lastLogTime -and $logTime -gt $r.lastLogTime) {
+      $gap = ($logTime - $r.lastLogTime).TotalSeconds
+      if ($gap -gt [double]$r.maxGap) { $r.maxGap = $gap }
+      $r.wrote = $true
+    }
+    if ($logTime -gt $started.AddSeconds(1)) { $r.wrote = $true }
+    $r.lastLogTime = $logTime
+    # Silence alone is never an alarm. Silence turns amber (no sound); red + sound needs evidence of a real stall:
+    #   process given (-ProcessId): alive but no CPU use for the whole quiet spell = hung. Busy CPU = working.
+    #   agent: quiet while waiting on a tool call (a long render, a big search) is normal, not a stall.
+    #   background shell: a command that never prints anything is just quiet; one that printed and then stopped is suspect.
+    #   anything else: quiet for longer than both the stall limit and 3x its own longest normal gap.
     $red = if ($job.stall) { [Math]::Min([double]$job.stall, $StallAfter) } else { $StallAfter }
+    $red = [Math]::Max($red, 3 * [double]$r.maxGap)
     $amber = [Math]::Min($WarnAfter, $red / 2)
     $color = [System.Drawing.Color]::Black
     $extra = ""
     if ($state -eq "run") {
-      if ($job.pid -and -not (Get-Process -Id $job.pid -ErrorAction SilentlyContinue)) {
+      $proc = if ($job.pid) { Get-Process -Id $job.pid -ErrorAction SilentlyContinue } else { $null }
+      $why = $null   # a reason the silence is healthy
+      if ($proc) {
+        $cpu = try { $proc.TotalProcessorTime.TotalSeconds } catch { $null }
+        if ($null -ne $cpu) {
+          if ($null -eq $r.cpuPrev -or $cpu -gt [double]$r.cpuPrev + 0.05) { $r.cpuBusyAt = $now }
+          $r.cpuPrev = $cpu
+          if ($r.cpuBusyAt -and ($now - $r.cpuBusyAt).TotalSeconds -lt $red) { $why = "process busy" }
+        }
+      }
+      if ($job.kind -eq "agent" -and $quiet -gt $amber -and (Test-AgentWaiting $job.log)) { $why = "waiting on a tool" }
+      if ($job.kind -eq "shell" -and -not $r.wrote) { $why = "running, no output" }
+      if ($job.pid -and -not $proc) {
         $pct, $text, $state = Get-State $job $f
         if ($state -eq "run") { $state = "fail"; $text = "process ended without finishing" }
       } elseif ($job.kind -eq "fg" -and $elapsed -gt 660) {
@@ -304,8 +342,10 @@ $timer.Add_Tick({
       } elseif ($job.kind -eq "agent" -and $quiet -gt 3600) {
         $state = "fail"; $text = "no activity for 1h - session closed or agent stuck"
       } elseif ($job.kind -in "pct", "hf", "ffmpeg" -and -not $job.pid -and $quiet -gt 3600) {
-        # a hand-registered job with no process to watch: after an hour of silence, close it instead of alarming forever
-        $state = "fail"; $text = "no progress for 1h - closed (register with -ProcessId to track the process)"
+        # a hand-registered job with no process to watch: after an hour of silence, close it quietly
+        $state = "closed"; $text = "closed: no progress for 1h"
+      } elseif ($quiet -gt $amber -and $why) {
+        $extra = "   ·  $why, quiet $(Fmt-Age $quiet)"; $r.alerted = $false
       } elseif ($quiet -gt $red) {
         $extra = "   ·  STALLED [no activity for $(Fmt-Age $quiet)]"; $color = [System.Drawing.Color]::Red
         if (-not $r.alerted) { $r.alerted = $true; Send-Alert $title }
@@ -328,7 +368,7 @@ $timer.Add_Tick({
       if ($r.bar.Style -ne "Continuous") { $r.bar.Style = "Continuous" }
       $r.bar.Value = 100
       $r.label.Text = "{0}   ·  {1}  ·  {2}" -f $title, $text, (Fmt-Age $elapsed)
-      $r.label.ForeColor = if ($state -eq "done") { [System.Drawing.Color]::DarkGreen } else { [System.Drawing.Color]::DarkRed }
+      $r.label.ForeColor = if ($state -eq "done") { [System.Drawing.Color]::DarkGreen } elseif ($state -eq "closed") { [System.Drawing.Color]::Gray } else { [System.Drawing.Color]::DarkRed }
       Remove-Item -LiteralPath $f.FullName -ErrorAction SilentlyContinue
     }
   }

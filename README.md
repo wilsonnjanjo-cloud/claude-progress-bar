@@ -15,9 +15,10 @@ A small Windows window that shows **one live bar for every task Claude Code is r
 | --- | --- | --- |
 | Running, output still changing | black text | green |
 | No activity for 2 minutes | amber | amber |
-| No activity for 5 minutes: probably stalled | **red + alert sound + taskbar flash** | red |
+| Stalled: quiet 5+ minutes **and** evidence it is stuck (see below) | **red + alert sound + taskbar flash** | red |
 | Finished | green | |
 | Failed, or the process died | dark red | |
+| Closed after 1 h with no progress (no process to check) | grey | |
 | Nothing running (still listening) | window hidden | grey |
 
 Right-click a row to copy a ready-made message for Claude ("Please check whether this task is still making progress or has stalled: …") or the task's log path, or to dismiss the bar.
@@ -70,15 +71,20 @@ pwsh -File scripts\progress_job.ps1 -Name "Export" -Kind pct -Log C:\work\export
 
 Running the same job again with the same log file replaces its old bar.
 
-### Avoiding false alarms
+### How it decides a task has stalled
 
-The stall alarm fires when a job's log hasn't changed for 5 minutes. To keep it for real stalls only:
+Silence alone never sets off the alarm. A quiet task turns amber (no sound); it turns **red with a sound only when there is evidence** that it is stuck:
 
-- **Pass `-ProcessId`.** The bar then knows the moment the process ends: finished if the log reached 100% or `DONE`, failed if not. Without it, the bar can only judge by silence.
-- **End the log with `DONE|…` (or `FAIL|…`), or a 100% line.**
-- **Set `-StallSeconds` above the job's longest normal quiet spell**, for example the time one slow frame takes to render.
-- **Right-click a bar and choose Dismiss** to clear one you know is finished.
-- **Tray icon, Mute alarm sound** silences the sound; stalled bars still turn red. A hand-registered job with no process to watch closes itself after 1 hour of silence.
+| Task | Treated as healthy while quiet | Alarm |
+| --- | --- | --- |
+| Job registered with `-ProcessId` | the process is using CPU | the process is alive but idle for the whole quiet spell (hung) |
+| Subagent | it is waiting on a tool call (a long render, a big search) | quiet after a tool result, when it should be working |
+| Background command | it has never printed anything (some commands are silent) | it printed output, then stopped |
+| Any job | it is within 3x its own longest normal pause | quiet past both the 5-minute limit and that learned pause |
+
+Finished work never alarms: `DONE|…`, a 100% line, or the process ending closes the bar. A hand-registered job with no process to watch closes itself (grey) after 1 hour of silence. Each alarm is written to `hook_events.log`, so any false alarm can be traced.
+
+For the best results, register long jobs with `-ProcessId`. If you need quiet, the tray menu has **Mute alarm sound** (stalled bars still turn red), and right-clicking a bar offers **Dismiss**.
 
 ## How it works
 
