@@ -1,6 +1,6 @@
 {
   "name": "claude-progress-bar",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "description": "A small always-on-top window with one live bar per Claude Code background command, subagent and long foreground command, across every session. Silence turns a bar amber; red with a sound only on evidence of a real stall. Windows; macOS in beta.",
   "author": {
     "name": "wilsonnjanjo-cloud"
