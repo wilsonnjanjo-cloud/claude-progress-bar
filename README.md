@@ -20,7 +20,7 @@ A small Windows window that shows **one live bar for every task Claude Code is r
 | Failed, or the process died | dark red | |
 | Nothing running (still listening) | window hidden | grey |
 
-Right-click a row to copy a ready-made message for Claude ("Please check whether this task is still making progress or has stalled: …") or the task's log path.
+Right-click a row to copy a ready-made message for Claude ("Please check whether this task is still making progress or has stalled: …") or the task's log path, or to dismiss the bar.
 
 The window hides itself when nothing is running and comes back when a new task starts. Closing it with **X** only hides it; to quit, right-click the tray icon and choose **Exit** (it restarts with the next Claude task).
 
@@ -63,11 +63,22 @@ Copy-Item "$env:LOCALAPPDATA\ClaudeProgressBar\Claude Progress Bar.lnk" "$env:AP
 # ffmpeg run with:  ffmpeg ... -progress C:\work\prog.txt
 pwsh -File scripts\progress_job.ps1 -Name "Final render" -Kind ffmpeg -Log C:\work\prog.txt -Total 1051 -ProcessId 1234
 
-# any script that writes "NN|text" lines, ending with "DONE|text" or "FAIL|text"
-pwsh -File scripts\progress_job.ps1 -Name "Export" -Kind pct -Log C:\work\export_prog.txt
+# any script that writes "NN|text" or "NN% text" lines (e.g. "42% (80/192 frames)"),
+# ending with "DONE|text", "FAIL|text" or a 100% line
+pwsh -File scripts\progress_job.ps1 -Name "Export" -Kind pct -Log C:\work\export_prog.txt -ProcessId 5678
 ```
 
-`-ProcessId` turns the bar red if that process dies without reporting an end; `-StallSeconds` changes the 5-minute stall alarm.
+Running the same job again with the same log file replaces its old bar.
+
+### Avoiding false alarms
+
+The stall alarm fires when a job's log hasn't changed for 5 minutes. To keep it for real stalls only:
+
+- **Pass `-ProcessId`.** The bar then knows the moment the process ends: finished if the log reached 100% or `DONE`, failed if not. Without it, the bar can only judge by silence.
+- **End the log with `DONE|…` (or `FAIL|…`), or a 100% line.**
+- **Set `-StallSeconds` above the job's longest normal quiet spell**, for example the time one slow frame takes to render.
+- **Right-click a bar and choose Dismiss** to clear one you know is finished.
+- **Tray icon, Mute alarm sound** silences the sound; stalled bars still turn red. A hand-registered job with no process to watch closes itself after 1 hour of silence.
 
 ## How it works
 

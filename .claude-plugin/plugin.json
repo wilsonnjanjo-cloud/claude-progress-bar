@@ -1,6 +1,6 @@
 {
   "name": "claude-progress-bar",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "A small always-on-top Windows window with one live bar per Claude Code background command, subagent and long foreground command, across every session. Turns amber after 2 minutes of silence and red, with a sound, after 5.",
   "author": { "name": "wilsonnjanjo-cloud" },
   "homepage": "https://github.com/wilsonnjanjo-cloud/claude-progress-bar",

@@ -10,8 +10,8 @@
 #   agent  : a Claude subagent. Done when the hook marks state=done; activity = its transcript growing.
 #   hf     : HyperFrames render log ("NN%  Phase", "EXIT rc")
 #   ffmpeg : ffmpeg -progress file (frame=, progress=end), needs total
-#   pct    : last line "NN|text", or "DONE|text" / "FAIL|text"
-# Right-click a row: copy its details (for asking Claude) or its log path.
+#   pct    : last progress line: "NN|text" or "NN% text" (100% = finished), or "DONE|text" / "FAIL|text"
+# Right-click a row: copy its details (for asking Claude) or its log path, or dismiss it. Tray menu: mute the alarm sound.
 # Colours: black running · amber = 2 min no activity · RED + sound + taskbar flash = 5 min no activity · green done · dark red failed/died.
 # Data (jobs, heartbeat, event log) lives in %LOCALAPPDATA%\ClaudeProgressBar unless CLAUDE_PROGRESS_DATA says otherwise,
 # so it survives plugin updates that move the code folder.
@@ -63,7 +63,11 @@ $tray = New-Object System.Windows.Forms.NotifyIcon
 $tray.Icon = $icons.idle; $tray.Text = "Claude Progress Bar: idle (listening)"; $tray.Visible = $true
 $trayMenu = New-Object System.Windows.Forms.ContextMenuStrip
 $tmShow = $trayMenu.Items.Add("Show Claude Progress Bar")
+$tmMute = $trayMenu.Items.Add("Mute alarm sound")
 $tmExit = $trayMenu.Items.Add("Exit (restarts with the next Claude task or logon)")
+# mute is remembered across restarts (a small flag file in the data folder); a stalled bar still turns red
+$MuteFlag = Join-Path $DataDir "alarm.muted"
+$tmMute.Checked = Test-Path $MuteFlag
 $tray.ContextMenuStrip = $trayMenu
 $script:userHidden = $false; $script:trayState = "idle"
 function Show-Bar {
@@ -74,11 +78,15 @@ function Show-Bar {
 }
 $tray.Add_MouseClick({ if ($_.Button -eq "Left") { Show-Bar; $form.Activate() } })
 $tmShow.Add_Click({ Show-Bar; $form.Activate() })
+$tmMute.Add_Click({
+  $tmMute.Checked = -not $tmMute.Checked
+  if ($tmMute.Checked) { Set-Content $MuteFlag "muted" } else { Remove-Item $MuteFlag -ErrorAction SilentlyContinue }
+})
 $tmExit.Add_Click({ $script:reallyExit = $true; $timer.Stop(); $tray.Visible = $false; $form.Close(); [System.Windows.Forms.Application]::Exit() })
 
 function Send-Alert($what) {
   # alert sound + tray balloon + flash the taskbar button until it is looked at; bring the window back
-  [System.Media.SystemSounds]::Exclamation.Play()
+  if (-not $tmMute.Checked) { [System.Media.SystemSounds]::Exclamation.Play() }
   try { $tray.ShowBalloonTip(8000, "Claude task stalled", [string]$what, "Warning") } catch {}
   Show-Bar
   try { [Win.Flash]::Go($form.Handle) } catch {}
@@ -168,13 +176,24 @@ function Get-State($job, $file) {
       return @(0, "starting", "run")
     }
     default {
+      # pct: the last line that carries progress, in either form:
+      #   "NN|text", "DONE|text", "FAIL|text"   (the documented form)
+      #   "NN% text" or "NN.N% (12/192 frames)" (what most renderers and scripts print)
+      # 100% counts as finished, so a job that just stops writing at 100% never reads as stalled.
       $t = Read-Tail $job.log
-      $line = ($t -split "`r?`n" | Where-Object { $_ -match '\|' } | Select-Object -Last 1)
-      if (-not $line) { return @(0, "starting", "run") }
-      $a, $b = $line -split '\|', 2
-      if ($a -eq "DONE") { return @(100, $b, "done") }
-      if ($a -eq "FAIL") { return @(100, $b, "fail") }
-      return @([int]$a, $b, "run")
+      $lines = @($t -split "`r?`n" | Where-Object { $_.Trim() })
+      for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+        $l = $lines[$i].Trim()
+        if ($l -match '^(DONE|FAIL)\s*\|(.*)$') { return @(100, $Matches[2].Trim(), $(if ($Matches[1] -eq "DONE") { "done" } else { "fail" })) }
+        $m = [regex]::Match($l, '^\s*(\d{1,3}(?:\.\d+)?)\s*(?:\||%)\s*(.*)$')
+        if ($m.Success) {
+          $p = [int][Math]::Floor([double]$m.Groups[1].Value)
+          $txt = $m.Groups[2].Value.Trim(" |-()".ToCharArray()); if (-not $txt) { $txt = "running" }
+          if ($p -ge 100) { return @(100, $(if ($txt -eq "running") { "finished" } else { $txt }), "done") }
+          return @([Math]::Max(0, $p), $txt, "run")
+        }
+      }
+      return @(0, "starting", "run")
     }
   }
 }
@@ -188,6 +207,8 @@ function Get-Details($key) {
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
 $miCopy = $menu.Items.Add("Copy details (to ask Claude)")
 $miPath = $menu.Items.Add("Copy log path")
+[void]$menu.Items.Add("-")
+$miDismiss = $menu.Items.Add("Dismiss this bar (task is finished or not needed)")
 function Set-Clip($text, $what) {
   # copy with retries (the clipboard can be briefly locked by another app), then confirm in the title bar
   try { [System.Windows.Forms.Clipboard]::SetDataObject([string]$text, $true, 10, 100); $form.Text = "Claude Progress Bar  -  copied: $what" }
@@ -207,6 +228,13 @@ $menu.Add_Opening({
 $menu.Add_Closed({ foreach ($x in $rows.Values) { $x.panel.BackColor = [System.Drawing.SystemColors]::Control } })
 $miCopy.Add_Click({ $t = Get-Details $script:menuKey; if ($t) { Set-Clip $t $rows[$script:menuKey].title } })
 $miPath.Add_Click({ if (-not $script:menuKey) { return }; $l = $rows[$script:menuKey].job.log; if ($l) { Set-Clip $l "log path" } })
+$miDismiss.Add_Click({
+  # remove one bar by hand: deletes its task file so it does not come back
+  $k = $script:menuKey; if (-not $k -or -not $rows[$k]) { return }
+  Remove-Item -LiteralPath (Join-Path $JobsDir "$k.job") -ErrorAction SilentlyContinue
+  $flow.Controls.Remove($rows[$k].panel); $rows.Remove($k)
+  try { Add-Content $EventLog ("{0} bar dismissed by user | {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $k) } catch {}
+})
 
 function New-Row($name) {
   $p = New-Object System.Windows.Forms.Panel; $p.Width = 530; $p.Height = 46; $p.Tag = [string]$name
@@ -275,6 +303,9 @@ $timer.Add_Tick({
         $state = "fail"; $text = "no result after 11m - session closed or command interrupted"
       } elseif ($job.kind -eq "agent" -and $quiet -gt 3600) {
         $state = "fail"; $text = "no activity for 1h - session closed or agent stuck"
+      } elseif ($job.kind -in "pct", "hf", "ffmpeg" -and -not $job.pid -and $quiet -gt 3600) {
+        # a hand-registered job with no process to watch: after an hour of silence, close it instead of alarming forever
+        $state = "fail"; $text = "no progress for 1h - closed (register with -ProcessId to track the process)"
       } elseif ($quiet -gt $red) {
         $extra = "   ·  STALLED [no activity for $(Fmt-Age $quiet)]"; $color = [System.Drawing.Color]::Red
         if (-not $r.alerted) { $r.alerted = $true; Send-Alert $title }
