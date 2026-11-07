@@ -16,7 +16,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash|PowerShell|Agent",
+        "matcher": "Bash|PowerShell|Agent|Monitor",
         "hooks": [
           {
             "type": "command",

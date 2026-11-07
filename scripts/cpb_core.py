@@ -328,8 +328,11 @@ def judge(w, job, state, now, started, log_time, cpu_seconds=None, pid_alive=Non
                 why = "process busy"
     if kind == "agent" and quiet > amber and waiting_on_tool:
         why = "waiting on a tool"
-    if kind == "shell" and not w.wrote:
+    if kind in ("shell", "fg") and not w.wrote:
+        # a command with no output and no files so far (a wait loop, a silent render) is quiet, not stuck
         why = "running, no output"
+    if kind == "monitor":
+        why = "watching"   # a Monitor waits for events: silence is its normal state; it ends at its own time limit
 
     if job.get("pid") and pid_alive is False:
         out["state"], out["text"] = "fail", "process ended without finishing"   # caller re-reads the log first
@@ -355,7 +358,7 @@ def judge(w, job, state, now, started, log_time, cpu_seconds=None, pid_alive=Non
     return out
 
 
-GENERIC = {"running", "working", "starting", "running (foreground)"}
+GENERIC = {"running", "working", "starting", "running (foreground)", "watching"}
 
 
 def status_line(text, pct, state, elapsed_s, note=None):

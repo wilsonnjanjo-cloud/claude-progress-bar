@@ -37,12 +37,17 @@ Job "M5_finished" @{ kind = "pct"; name = "render finished"; log = "$T\done.txt"
 # 6 render, no process given, quiet at 40% -> alarm (silence is the only evidence)
 "40% (77/192 frames)" | Set-Content "$T\nopid.txt"; Quiet "$T\nopid.txt"
 Job "M6_nopid_quiet" @{ kind = "pct"; name = "render no pid quiet"; log = "$T\nopid.txt"; stall = 30 }
+# 7 a silent foreground wait loop (no output, no files) -> no alarm
+Job "F7_wait_loop" @{ kind = "fg"; name = "silent wait loop"; state = "run"; stall = 30 }
+# 8 a Monitor watch whose output file is held open, 30-min limit -> no alarm, shows "stops in"
+$monOut = "$T\monitor.output"; Set-Content $monOut ""; $held = [IO.File]::Open($monOut, 'Open', 'ReadWrite', 'Read')
+Job "N8_monitor" @{ kind = "monitor"; name = "monitor watch"; log = $monOut; timeout = 1800; stall = 30 }
 
 $w = Start-Process $Exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$T\win.ps1`" -DataDir `"$D`"" -PassThru -WindowStyle Hidden -RedirectStandardError "$T\err_$Exe.txt"
 Start-Sleep 50
 "== $Exe  window alive: $(-not $w.HasExited)   stderr bytes: $((Get-Item "$T\err_$Exe.txt").Length)"
 "alarms raised:"; Select-String -Path "$D\hook_events.log" -Pattern "stall alarm" | % { "  " + ($_.Line -replace '^.*stall alarm \| ', '') }
 "jobs still open: " + ((Get-ChildItem "$D\jobs" -Filter *.job | % BaseName) -join ", ")
-Stop-Process -Id $w.Id, $busy.Id, $idle.Id -Force -ErrorAction SilentlyContinue
+Stop-Process -Id $w.Id, $busy.Id, $idle.Id -Force -ErrorAction SilentlyContinue; $held.Close()
 $got = @(Select-String -Path "$D\hook_events.log" -Pattern "stall alarm" | % { $_.Line -replace '^.*stall alarm \| ', '' } | Sort-Object)
 "RESULT: " + $(if (($got -join ",") -eq "agent stuck,render hung process,render no pid quiet") { "PASS" } else { "FAIL" })

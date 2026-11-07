@@ -312,6 +312,18 @@ class App:
 
     def get_state(self, job, now, started):
         kind = job.get("kind")
+        if kind == "monitor":
+            # a Monitor watch: ends when its command ends (task notice / output released) or at its time limit
+            limit = float(job.get("timeout") or 0)
+            if limit and now - started > limit + 5:
+                return 100, "stopped (time limit)", "done"
+            st = core.shell_status(read_tail(self.transcript_for(job), 400000), job.get("tid"))
+            if st:
+                return 100, "finished", "done"
+            log = job.get("log")
+            if log and os.path.exists(log) and plat.file_in_use(log) is False and now - (mtime(log) or now) > 10:
+                return 100, "finished", "done"
+            return (-1, "stops in %s" % core.fmt_age(limit - (now - started)), "run") if limit else (-1, "watching", "run")
         if kind == "shell":
             st = core.shell_status(read_tail(self.transcript_for(job), 400000), job.get("tid"))
             if st:

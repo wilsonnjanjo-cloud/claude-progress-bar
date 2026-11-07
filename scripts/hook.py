@@ -447,6 +447,22 @@ def main():
         spawn_self("--watch", os.path.join(JOBS, safe(f"{sess}_{tid}") + ".job"))
         ensure_window()
 
+    elif ev == "PostToolUse" and d.get("tool_name") == "Monitor":
+        # a Monitor watch (the panel's "Stops in 24m" tasks): runs in the background like a command, with a time limit
+        ti = d.get("tool_input") or {}
+        tr = d.get("tool_response") or {}
+        tid = tr.get("taskId") if isinstance(tr, dict) else None
+        if not tid:
+            return
+        limit = 0 if tr.get("persistent") else float(tr.get("timeoutMs") or ti.get("timeout_ms") or 0) / 1000
+        write_job(f"{sess}_{tid}", {"kind": "monitor", "name": ti.get("description") or ti.get("command", "")[:60],
+                                    "project": project, "log": os.path.join(tasks_dir, tid + ".output"),
+                                    "started": time.time(), "tid": tid, "transcript": tp, "timeout": limit,
+                                    "session": d.get("session_id") or "",
+                                    "command": (ti.get("command") or "")[:4000], "cwd": d.get("cwd") or ""})
+        log_event("monitor", sess, tid, project, ti.get("description") or ti.get("command", "")[:60])
+        ensure_window()
+
     elif ev == "SubagentStart":
         aid = d.get("agent_id")
         if not aid:

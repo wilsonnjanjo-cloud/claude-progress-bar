@@ -230,6 +230,14 @@ function Get-State($job, $file) {
       if ($shown) { return @($shown[0], $shown[1], "run") }
       return @(-1, "running", "run")
     }
+    "monitor" {
+      # a Monitor watch: running while its output file is held, ends by itself at its time limit
+      $age = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [double]$job.started
+      if ($job.timeout -and $age -gt [double]$job.timeout + 5) { return @(100, "stopped (time limit)", "done") }
+      if (-not (Test-Held $job.log $job.started)) { return @(100, "finished", "done") }
+      if ($job.timeout) { return @(-1, "stops in $(Fmt-Age ([double]$job.timeout - $age))", "run") }
+      return @(-1, "watching", "run")
+    }
     "files" { return Get-FilesState $job }
     "agent" {
       if ($job.state -eq "done") { return @(100, "finished", "done") }
@@ -419,7 +427,9 @@ $timer.Add_Tick({
         }
       }
       if ($job.kind -eq "agent" -and $quiet -gt $amber -and (Test-AgentWaiting $job.log)) { $why = "waiting on a tool" }
-      if ($job.kind -eq "shell" -and -not $r.wrote) { $why = "running, no output" }
+      # a command with no output and no files so far (a wait loop, a silent render) is quiet, not stuck: no evidence of a stall
+      if ($job.kind -in "shell", "fg" -and -not $r.wrote) { $why = "running, no output" }
+      if ($job.kind -eq "monitor") { $why = "watching" }   # a Monitor waits for events: silence is normal; it ends at its time limit
       if ($job.pid -and -not $proc) {
         $pct, $text, $state = Get-State $job $f
         if ($state -eq "run") { $state = "fail"; $text = "process ended without finishing" }
@@ -443,7 +453,7 @@ $timer.Add_Tick({
     # right-hand status, always fully visible: the count, the percentage, the time spent, then any warning.
     # Generic words ("running", "working") are left out: the moving bar already says that.
     $parts = @()
-    if ($text -and $text -notmatch '^(running|working|starting|running \(foreground\))$') { $parts += $(if ($text.Length -gt 28) { $text.Substring(0, 27) + "…" } else { $text }) }
+    if ($text -and $text -notmatch '^(running|working|starting|watching|running \(foreground\))$') { $parts += $(if ($text.Length -gt 28) { $text.Substring(0, 27) + "…" } else { $text }) }
     if ($pct -ge 0 -and $state -eq "run" -and $text -notmatch "^$pct%") { $parts += "$pct%" }
     $parts += (Fmt-Age $elapsed)
     if ($extra) { $parts += $extra }
