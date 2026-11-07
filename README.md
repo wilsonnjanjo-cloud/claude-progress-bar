@@ -104,8 +104,12 @@ Then quit the window from its tray icon and delete `%LOCALAPPDATA%\ClaudeProgres
 
 ## Known limits
 
-- Windows only for now. A macOS version needs a different window (a menu-bar app); contributions welcome.
+- Windows only for now. A macOS version needs a different window (a menu-bar app); see [Contributing](#contributing).
 - Always-on-top is best effort: some Windows setups clear it. The tray icon and taskbar button always work.
+
+## Contributing
+
+Contributions are welcome: bug reports, ideas and pull requests. A macOS version would be especially welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to report a bug or send a change. Because this plugin runs on every command Claude Code runs, every pull request is reviewed line by line before it is merged.
 
 ## License
 
