@@ -1,4 +1,4 @@
-# Windows alarm test: runs a test copy of progress_window.ps1 (own mutex, own data folder, sound muted) against six
+﻿# Windows alarm test: runs a test copy of progress_window.ps1 (own mutex, own data folder, sound muted) against six
 # fake tasks for ~50 s. Expected alarms: "agent stuck", "render hung process", "render no pid quiet".
 #   pwsh -File tests\windows_alarm_test.ps1                        (PowerShell 7)
 #   powershell -File tests\windows_alarm_test.ps1 -Exe powershell  (Windows PowerShell 5.1)
@@ -9,7 +9,7 @@ Remove-Item $D -Recurse -Force -ErrorAction SilentlyContinue; New-Item -ItemType
 Set-Content "$D\alarm.muted" "muted"
 $src = Get-Content (Join-Path $PSScriptRoot "..\scripts\progress_window.ps1") -Raw
 $src = $src.Replace('Local\ClaudeProgressBar"', 'Local\ClaudeProgressBarTEST"').Replace('$form.Text = "Claude Progress Bar";', '$form.Text = "CPB TEST";')
-Set-Content "$T\win.ps1" $src -Encoding utf8
+[IO.File]::WriteAllText("$T\win.ps1", $src, (New-Object Text.UTF8Encoding $true))   # with BOM, so PowerShell 5.1 reads it as UTF-8
 
 $old = (Get-Date).AddMinutes(-6); $start = [DateTimeOffset]::Now.AddMinutes(-8).ToUnixTimeMilliseconds() / 1000
 function Job($name, $h) { $h.started = $start; $h | ConvertTo-Json | Set-Content "$D\jobs\$name.job" }

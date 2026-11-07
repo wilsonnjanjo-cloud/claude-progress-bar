@@ -114,6 +114,11 @@ class App:
         self.menu.add_command(label="Dismiss this bar", command=self.dismiss)
 
         self.log("listener started", "pid %d" % os.getpid(), "macos" if plat.MAC else sys.platform)
+        try:  # which code this window runs, so a newer installed version can replace it (hook.py upgrade_window)
+            with open(os.path.join(data, "window.code"), "w", encoding="utf-8") as f:
+                json.dump({"pid": os.getpid(), "dir": HERE}, f)
+        except OSError:
+            pass
         root.after(200, self.tick)
 
     # ------------------------------------------------------------ helpers

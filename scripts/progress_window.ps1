@@ -1,4 +1,4 @@
-# "Claude Progress Bar" window: one bar per background job, for every Claude Code session (fed by hook.py) and for
+﻿# "Claude Progress Bar" window: one bar per background job, for every Claude Code session (fed by hook.py) and for
 # jobs registered by hand (progress_job.ps1). Checks every 2 s, uses no GPU.
 # Always-on listener: one instance (mutex), started by the hooks through Explorer (a launcher shortcut in the data
 # folder) and optionally at Windows logon. It never quits on its own: it hides when nothing is running and shows itself
@@ -30,6 +30,8 @@ $Heartbeat = Join-Path $DataDir "window.heartbeat"
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Claude Progress Bar"; $form.Width = 560; $form.Height = 80; $form.TopMost = $true
+# the feather icon in the title bar and on the taskbar button (Tk's standard icon, see assets/feather-icon-LICENSE.txt)
+try { $form.Icon = New-Object System.Drawing.Icon (Join-Path $PSScriptRoot "..\assets\feather.ico") } catch {}
 # a normal window (not a tool window) so it has a taskbar button and can always be found; always-on-top is best effort
 $form.FormBorderStyle = "FixedSingle"; $form.MaximizeBox = $false; $form.StartPosition = "Manual"; $form.ShowInTaskbar = $true
 $wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
@@ -251,10 +253,10 @@ $miDismiss.Add_Click({
 })
 
 function New-Row($name) {
-  $p = New-Object System.Windows.Forms.Panel; $p.Width = 530; $p.Height = 46; $p.Tag = [string]$name
-  $lab = New-Object System.Windows.Forms.Label; $lab.Left = 4; $lab.Top = 2; $lab.Width = 520; $lab.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+  $p = New-Object System.Windows.Forms.Panel; $p.Width = 530; $p.Height = 44; $p.Tag = [string]$name
+  $lab = New-Object System.Windows.Forms.Label; $lab.Left = 4; $lab.Top = 2; $lab.Width = 520; $lab.Height = 24; $lab.Font = New-Object System.Drawing.Font("Segoe UI", 10.5)
   $lab.AutoEllipsis = $true
-  $bar = New-Object System.Windows.Forms.ProgressBar; $bar.Left = 4; $bar.Top = 22; $bar.Width = 520; $bar.Height = 18; $bar.Style = "Continuous"
+  $bar = New-Object System.Windows.Forms.ProgressBar; $bar.Left = 4; $bar.Top = 27; $bar.Width = 520; $bar.Height = 12; $bar.Style = "Continuous"
   $p.ContextMenuStrip = $menu; $lab.ContextMenuStrip = $menu; $bar.ContextMenuStrip = $menu   # right-click: copy details
   $p.Controls.Add($lab); $p.Controls.Add($bar); $flow.Controls.Add($p)
   return @{ panel = $p; label = $lab; bar = $bar; ended = $null; name = $name }
@@ -372,15 +374,15 @@ $timer.Add_Tick({
       Remove-Item -LiteralPath $f.FullName -ErrorAction SilentlyContinue
     }
   }
-  if ($script:titleReset -and (Get-Date) -gt $script:titleReset) { $form.Text = "Claude Progress Bar"; $script:titleReset = $null }
+  if ($script:titleReset -and (Get-Date) -gt $script:titleReset) { $script:titleReset = $null }
   foreach ($k in @($rows.Keys)) {
     $r = $rows[$k]
     if ($r.ended -and ((Get-Date) - $r.ended).TotalSeconds -gt 5) { $flow.Controls.Remove($r.panel); $rows.Remove($k) }
   }
   # grow with the rows up to the screen height (scrolling only beyond that), and keep the whole window on screen
   $wa = [System.Windows.Forms.Screen]::FromControl($form).WorkingArea
-  $maxRows = [Math]::Max(3, [Math]::Floor(($wa.Height - 70) / 48))
-  $h = 60 + 48 * [Math]::Min($maxRows, [Math]::Max(1, $rows.Count))
+  $maxRows = [Math]::Max(3, [Math]::Floor(($wa.Height - 70) / 46))
+  $h = 56 + 46 * [Math]::Min($maxRows, [Math]::Max(1, $rows.Count))
   if ($form.Height -ne $h) { $form.Height = $h }
   if ($form.Bottom -gt $wa.Bottom) { $form.Top = [Math]::Max($wa.Top, $wa.Bottom - $form.Height) }
   # tray icon = worst state of the running rows
@@ -392,6 +394,11 @@ $timer.Add_Tick({
   $tip = if ($live.Count) { "Claude Progress Bar: $($live.Count) running" + $(if ($nRed) { ", $nRed stalled" } elseif ($nAmber) { ", $nAmber quiet" } else { "" }) } else { "Claude Progress Bar: idle (listening)" }
   if ($tip.Length -gt 63) { $tip = $tip.Substring(0, 63) }
   $tray.Text = $tip
+  if (-not $script:titleReset) {
+    $status = if ($live.Count) { "$($live.Count) running" + $(if ($nRed) { ", $nRed stalled" } elseif ($nAmber) { ", $nAmber quiet" } else { "" }) } else { "idle" }
+    $t = "Claude Progress Bar  -  $status"
+    if ($form.Text -ne $t) { $form.Text = $t }
+  }
   # nothing running for 6 s: hide but keep listening; it never quits on its own
   if ($rows.Count -gt 0) { $script:lastActive = Get-Date }
   elseif ($form.Visible -and ((Get-Date) - $script:lastActive).TotalSeconds -gt 6) { $form.Hide() }
@@ -410,6 +417,8 @@ $timer.Start()
 try { [IO.File]::WriteAllText($Heartbeat, (Get-Date -Format o)) } catch {}
 Remove-Item "$Heartbeat.launch" -ErrorAction SilentlyContinue
 try { Add-Content $EventLog ("{0} listener started | pid {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $PID) } catch {}
+# which code this window runs, so a newer installed version can replace it (hook.py upgrade_window)
+try { @{ pid = $PID; dir = $PSScriptRoot } | ConvertTo-Json -Compress | Set-Content -Encoding utf8 (Join-Path $DataDir "window.code") } catch {}
 # message loop without a main form: the window shows and hides itself; the process lives until Exit or logoff
 [System.Windows.Forms.Application]::Run()
 $tray.Dispose()

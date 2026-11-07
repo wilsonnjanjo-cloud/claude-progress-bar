@@ -1,4 +1,4 @@
-# Register a long job by hand with the Claude Progress Bar window (opens it if needed), for a real % bar.
+﻿# Register a long job by hand with the Claude Progress Bar window (opens it if needed), for a real % bar.
 # usage: progress_job.ps1 -Name "Render" -Kind hf -Log C:\...\render.log [-ProcessId 1234] [-StallSeconds 120] [-Project Demo]
 #        progress_job.ps1 -Name "Master" -Kind ffmpeg -Log C:\...\prog.txt -Total 1051
 #        progress_job.ps1 -Name "Export" -Kind pct -Log C:\...\export_prog.txt

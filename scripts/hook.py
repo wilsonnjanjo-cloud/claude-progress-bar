@@ -82,6 +82,45 @@ def ensure_launcher():
     return ""
 
 
+def code_version(code_dir):
+    """Plugin version of a code folder (scripts/ -> ../.claude-plugin/plugin.json), as a comparable tuple."""
+    try:
+        v = json.load(open(os.path.join(code_dir, "..", ".claude-plugin", "plugin.json"), encoding="utf-8-sig"))["version"]
+        return tuple(int(x) for x in re.findall(r"\d+", v)[:3])
+    except Exception:
+        return None
+
+
+def upgrade_window():
+    """A newer version was installed while an older window is running: close the old one so the new one starts.
+    Only ever upgrades (an older hook, e.g. in a session started before the update, never downgrades the window)."""
+    try:
+        info = json.load(open(os.path.join(DATA, "window.code"), encoding="utf-8-sig"))
+        running_dir, pid = info.get("dir"), int(info.get("pid") or 0)
+    except Exception:
+        return
+    if not pid or not running_dir or os.path.normcase(os.path.abspath(running_dir)) == os.path.normcase(HERE):
+        return
+    mine, theirs = code_version(HERE), code_version(running_dir)
+    if not mine or (theirs and mine <= theirs):
+        return
+    log_event("window upgrade", "%s -> %s" % (".".join(map(str, theirs or ())) or "?", ".".join(map(str, mine))))
+    try:
+        if WIN:
+            subprocess.run(["taskkill", "/PID", str(pid), "/F"], creationflags=NO_WINDOW, capture_output=True, timeout=10)
+        else:
+            os.kill(pid, 15)
+    except Exception:
+        pass
+    for p in (HEARTBEAT, os.path.join(DATA, "window.code")):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+    time.sleep(1)
+    ensure_window()
+
+
 def ensure_window():
     try:
         if time.time() - os.path.getmtime(HEARTBEAT) < 8:
@@ -265,6 +304,7 @@ if __name__ == "__main__":
             launch_if_running(sys.argv[2])
         else:
             main()
+            upgrade_window()
             reopen_if_needed()
     except Exception as e:  # never break Claude; leave a trace for debugging
         try:
