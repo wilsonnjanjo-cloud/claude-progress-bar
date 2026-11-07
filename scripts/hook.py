@@ -1,15 +1,22 @@
-"""Claude Code hook (all sessions): registers background work with the Claude Progress Bar window (Windows only).
+"""Claude Code hook (all sessions): registers background work with the Claude Progress Bar window (Windows, macOS beta).
   PostToolUse Bash|PowerShell with run_in_background -> a 'shell' bar (runs while its output file is held open)
   SubagentStart / PostToolUse Agent / SubagentStop     -> an 'agent' bar (activity = its transcript growing)
 Jobs are small JSON files in JOBS; the window (progress_window.ps1) draws them. Never blocks or fails Claude."""
 import json, os, re, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))  # code folder (moves when the plugin updates)
+WIN = sys.platform == "win32"
+MAC = sys.platform == "darwin"
+NO_WINDOW = 0x08000000  # CREATE_NO_WINDOW (Windows only)
 # data folder: stable across updates; override with CLAUDE_PROGRESS_DATA
-DATA = os.environ.get("CLAUDE_PROGRESS_DATA") or os.path.join(
-    os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "ClaudeProgressBar")
+if WIN:
+    _base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+else:
+    _base = os.path.join(os.path.expanduser("~"), "Library", "Application Support")
+DATA = os.environ.get("CLAUDE_PROGRESS_DATA") or os.path.join(_base, "ClaudeProgressBar")
 JOBS = os.path.join(DATA, "jobs")
 WINDOW = os.path.join(HERE, "progress_window.ps1")
+MAC_WINDOW = os.path.join(HERE, "progress_window_mac.py")
 HEARTBEAT = os.path.join(DATA, "window.heartbeat")
 LAUNCHER = os.path.join(DATA, "Claude Progress Bar.lnk")
 
@@ -65,7 +72,7 @@ def ensure_launcher():
           % (q(LAUNCHER), q(vbs), q(DATA), q(HERE)))
     try:
         subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps],
-                       creationflags=0x08000000, timeout=20, capture_output=True)
+                       creationflags=NO_WINDOW, timeout=20, capture_output=True)
         if os.path.exists(LAUNCHER):
             open(stamp, "w", encoding="utf-8").write(HERE)
             log_event("launcher created", LAUNCHER)
@@ -91,12 +98,21 @@ def ensure_window():
             os.remove(HEARTBEAT + ".launch")
         except OSError:
             return
+    if MAC:
+        # a detached python process running the tkinter window (single instance via a lock file in the data folder)
+        try:
+            subprocess.Popen([sys.executable, MAC_WINDOW, "--data", DATA], start_new_session=True, close_fds=True,
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            log_event("window launched", "macos")
+        except Exception as e:
+            log_event("window launch failed", repr(e))
+        return
     lnk = ensure_launcher()
     if lnk:
         # start it through Explorer: the window then runs as a normal app, outside Claude Code's process container,
         # where Windows lets it stay always-on-top (launched straight from a hook it kept dropping behind other windows)
         try:
-            subprocess.Popen(["explorer.exe", lnk], creationflags=0x08000000, close_fds=True)
+            subprocess.Popen(["explorer.exe", lnk], creationflags=NO_WINDOW, close_fds=True)
             log_event("window launched", "via explorer")
             return
         except OSError:
@@ -105,21 +121,24 @@ def ensure_window():
     # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP, plus CREATE_BREAKAWAY_FROM_JOB so the window outlives the hook
     # (DETACHED_PROCESS makes pwsh exit at once, so it is not used)
     try:
-        subprocess.Popen(args, creationflags=0x08000000 | 0x00000200 | 0x01000000, close_fds=True)
+        subprocess.Popen(args, creationflags=NO_WINDOW | 0x00000200 | 0x01000000, close_fds=True)
     except OSError:
-        subprocess.Popen(args, creationflags=0x08000000 | 0x00000200, close_fds=True)
+        subprocess.Popen(args, creationflags=NO_WINDOW | 0x00000200, close_fds=True)
 
 
 FG_MIN_S = 10  # a foreground command gets a bar only once it has run this long
 
 
 def spawn_delayed_launch(job_path):
+    args = [sys.executable, os.path.abspath(__file__), "--launch-if-running", job_path]
+    if not WIN:
+        subprocess.Popen(args, start_new_session=True, close_fds=True,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return
     try:
-        subprocess.Popen([sys.executable, os.path.abspath(__file__), "--launch-if-running", job_path],
-                         creationflags=0x08000000 | 0x00000200 | 0x01000000, close_fds=True)
+        subprocess.Popen(args, creationflags=NO_WINDOW | 0x00000200 | 0x01000000, close_fds=True)
     except OSError:
-        subprocess.Popen([sys.executable, os.path.abspath(__file__), "--launch-if-running", job_path],
-                         creationflags=0x08000000 | 0x00000200, close_fds=True)
+        subprocess.Popen(args, creationflags=NO_WINDOW | 0x00000200, close_fds=True)
 
 
 def launch_if_running(job_path):
@@ -208,7 +227,8 @@ def main():
             return
         write_job(f"{sess}_{tid}", {"kind": "shell", "name": ti.get("description") or ti.get("command", "")[:60],
                                     "project": project, "log": os.path.join(tasks_dir, tid + ".output"),
-                                    "started": time.time()})
+                                    "started": time.time(), "tid": tid, "transcript": tp,
+                                    "session": d.get("session_id") or ""})
         log_event("bg shell", sess, tid, project, ti.get("description") or ti.get("command", "")[:60])
         ensure_window()
 
@@ -238,8 +258,8 @@ def main():
 
 
 if __name__ == "__main__":
-    if os.name != "nt":
-        sys.exit(0)  # the window is Windows-only for now; on macOS/Linux the hook does nothing
+    if not (WIN or MAC):
+        sys.exit(0)  # Windows and macOS (beta) only; on Linux the hook does nothing
     try:
         if len(sys.argv) > 2 and sys.argv[1] == "--launch-if-running":
             launch_if_running(sys.argv[2])

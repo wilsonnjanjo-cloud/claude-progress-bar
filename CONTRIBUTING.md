@@ -17,8 +17,9 @@ The event log contains your project and task names, so remove anything private b
 1. Fork the repository and create a branch for your change.
 2. Keep each pull request small and focused on one thing. Explain what it changes and why.
 3. Say how you tested it: Windows version, PowerShell 7 and/or the built-in Windows PowerShell 5.1, and what you ran.
-4. Keep both PowerShell versions working: no PowerShell 7-only syntax (`??`, ternary `? :`, `&&` / `||`) in `progress_window.ps1` or `progress_job.ps1`.
-5. Bump `version` in `.claude-plugin/plugin.json` only if the maintainer asks you to.
+4. If you change the stall rules or log parsing, change both `scripts/progress_window.ps1` (Windows) and `scripts/cpb_core.py` (macOS), and keep `tests/test_core.py`, `tests/window_smoke_test.py` and `tests/windows_alarm_test.ps1` passing.
+5. Keep both PowerShell versions working: no PowerShell 7-only syntax (`??`, ternary `? :`, `&&` / `||`) in `progress_window.ps1` or `progress_job.ps1`.
+6. Bump `version` in `.claude-plugin/plugin.json` only if the maintainer asks you to.
 
 ## Ground rules
 
@@ -31,7 +32,7 @@ This plugin runs automatically on every command Claude Code runs, on every machi
 
 ## Ideas that would be welcome
 
-- A macOS version (a menu-bar app reading the same task files)
+- Testing the macOS beta on a real Mac (`python3 tests/window_smoke_test.py`), and a menu-bar status icon for it
 - More progress-log formats for popular tools
 - Translations of the window text
 

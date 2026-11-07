@@ -3,12 +3,12 @@
   "owner": {
     "name": "wilsonnjanjo-cloud"
   },
-  "description": "Claude Progress Bar: a live progress window for Claude Code background tasks and subagents (Windows).",
+  "description": "Claude Progress Bar: a live progress window for Claude Code background tasks and subagents (Windows; macOS beta).",
   "plugins": [
     {
       "name": "claude-progress-bar",
       "source": "./",
-      "description": "Live progress window for Claude Code background tasks and subagents (Windows)."
+      "description": "Live progress window for Claude Code background tasks and subagents (Windows; macOS beta)."
     }
   ]
 }

@@ -1,6 +1,6 @@
 # Claude Progress Bar
 
-A small Windows window that shows **one live bar for every task Claude Code is running in the background**, across all your sessions at once, and warns you when one goes quiet.
+A small window for **Windows** (and **macOS, in beta**) that shows **one live bar for every task Claude Code is running in the background**, across all your sessions at once, and warns you when one goes quiet.
 
 - Background shell commands (`run_in_background`, or commands Claude moved to the background)
 - Subagents, named the same way as in Claude Code's Background tasks panel
@@ -23,14 +23,14 @@ A small Windows window that shows **one live bar for every task Claude Code is r
 
 Right-click a row to copy a ready-made message for Claude ("Please check whether this task is still making progress or has stalled: …") or the task's log path, or to dismiss the bar.
 
-The window hides itself when nothing is running and comes back when a new task starts. Closing it with **X** only hides it; to quit, right-click the tray icon and choose **Exit** (it restarts with the next Claude task).
+The window hides itself when nothing is running and comes back when a new task starts. Closing it only hides it. On Windows, quit from the tray icon (**Exit**); on macOS, from the **Progress Bar** menu at the top of the screen (**Quit**). Either way it restarts with the next Claude task.
 
 ## Requirements
 
-- **Windows 10 or 11** (macOS and Linux are not supported yet; on those the plugin installs but does nothing)
 - **Claude Code** (CLI, desktop app or IDE extension)
-- **Python 3** available as `python` on your PATH
-- PowerShell 7 (`pwsh`) is used if installed; otherwise the built-in Windows PowerShell 5.1
+- **Windows 10 or 11**: Python 3 available as `python`. PowerShell 7 (`pwsh`) is used if installed, otherwise the built-in Windows PowerShell 5.1.
+- **macOS (beta)**: Python 3 available as `python3`, with tkinter. The installer from python.org includes it; with Homebrew Python, run `brew install python-tk`. If tkinter is missing you get one notification saying so.
+- Linux is not supported yet; there the plugin installs but does nothing.
 
 ## Install (as a Claude Code plugin)
 
@@ -56,9 +56,19 @@ The hooks start the window automatically. If you also want the tray icon from th
 Copy-Item "$env:LOCALAPPDATA\ClaudeProgressBar\Claude Progress Bar.lnk" "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\"
 ```
 
+## macOS (beta)
+
+The macOS version is new and **has not been tested on a real Mac yet**. It is a Python window with the same bars, colours, right-click menu and stall rules as the Windows one:
+
+- It appears near the top-right corner and stays on top. It has a Dock icon (click it to bring the window back) and a **Progress Bar** menu in the menu bar with **Mute alarm sound** and **Quit**.
+- Stall alarms play a sound and show a macOS notification.
+- There is no menu-bar status icon yet (the Windows tray icon's equivalent).
+
+If you use a Mac, please run `python3 tests/window_smoke_test.py` from this repository and post the output in the [macOS testers issue](https://github.com/wilsonnjanjo-cloud/claude-progress-bar/issues?q=is%3Aissue+macOS+testers). It takes about a minute and does not touch your real data.
+
 ## Tracking your own long jobs
 
-`scripts/progress_job.ps1` adds a bar with a real percentage for any job that writes a progress file:
+`scripts/progress_job.ps1` (Windows) or `scripts/progress_job.py` (macOS, also works on Windows) adds a bar with a real percentage for any job that writes a progress file:
 
 ```powershell
 # ffmpeg run with:  ffmpeg ... -progress C:\work\prog.txt
@@ -67,6 +77,11 @@ pwsh -File scripts\progress_job.ps1 -Name "Final render" -Kind ffmpeg -Log C:\wo
 # any script that writes "NN|text" or "NN% text" lines (e.g. "42% (80/192 frames)"),
 # ending with "DONE|text", "FAIL|text" or a 100% line
 pwsh -File scripts\progress_job.ps1 -Name "Export" -Kind pct -Log C:\work\export_prog.txt -ProcessId 5678
+```
+
+```bash
+# macOS
+python3 scripts/progress_job.py --name "Final render" --kind pct --log ~/work/progress.txt --pid 1234
 ```
 
 Running the same job again with the same log file replaces its old bar.
@@ -89,10 +104,19 @@ For the best results, register long jobs with `-ProcessId`. If you need quiet, t
 ## How it works
 
 - `scripts/hook.py` runs on Claude Code hook events (`PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `SubagentStart`, `SubagentStop`). It writes one small JSON file per task and never blocks or slows Claude.
-- `scripts/progress_window.ps1` is the window (WinForms). It checks the task files every 2 seconds and watches each task's output file or transcript for activity. One copy runs at a time.
-- `scripts/launch_window.vbs` starts the window without a console flash. The hook opens it through Explorer so the window runs as a normal app, separate from Claude Code.
+- **Windows:** `scripts/progress_window.ps1` is the window (WinForms). `scripts/launch_window.vbs` starts it without a console flash; the hook opens it through Explorer so it runs as a normal app, separate from Claude Code.
+- **macOS:** `scripts/progress_window_mac.py` is the window (tkinter). `scripts/cpb_core.py` holds the stall rules and log parsing; every macOS system call (CPU time, open files, notifications, sound) is in `scripts/cpb_platform.py`.
+- Both windows check the task files every 2 seconds, watch each task's output file or transcript for activity, and run one copy at a time.
 
-Runtime data (task files, an event log, the launcher shortcut) lives in `%LOCALAPPDATA%\ClaudeProgressBar`. Set the `CLAUDE_PROGRESS_DATA` environment variable to use another folder. The event log contains your project and task names and stays on your PC.
+Runtime data (task files and an event log) lives in `%LOCALAPPDATA%\ClaudeProgressBar` on Windows and `~/Library/Application Support/ClaudeProgressBar` on macOS. Set the `CLAUDE_PROGRESS_DATA` environment variable to use another folder. The event log contains your project and task names and stays on your computer.
+
+### Tests
+
+- `python tests/test_core.py`: the shared behaviour cases (progress formats, transcripts, stall rules) against the Python core.
+- `python3 tests/window_smoke_test.py`: runs the Python window for a minute against six fake tasks.
+- `pwsh -File tests/windows_alarm_test.ps1`: the same six tasks against the Windows window.
+
+The Windows window implements the stall rules in PowerShell and the macOS window in Python, so a change to the rules must keep both passing.
 
 ## Uninstall
 
@@ -100,16 +124,16 @@ Runtime data (task files, an event log, the launcher shortcut) lives in `%LOCALA
 /plugin uninstall claude-progress-bar@claude-progress-bar
 ```
 
-Then quit the window from its tray icon and delete `%LOCALAPPDATA%\ClaudeProgressBar` (and the Startup shortcut, if you added one).
+Then quit the window (tray icon on Windows, **Progress Bar** menu on macOS) and delete its data folder: `%LOCALAPPDATA%\ClaudeProgressBar` on Windows (plus the Startup shortcut, if you added one), `~/Library/Application Support/ClaudeProgressBar` on macOS.
 
 ## Known limits
 
-- Windows only for now. A macOS version needs a different window (a menu-bar app); see [Contributing](#contributing).
+- macOS support is a beta and untested on real hardware; reports welcome. No menu-bar status icon yet. Linux is not supported.
 - Always-on-top is best effort: some Windows setups clear it. The tray icon and taskbar button always work.
 
 ## Contributing
 
-Contributions are welcome: bug reports, ideas and pull requests. A macOS version would be especially welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to report a bug or send a change. Because this plugin runs on every command Claude Code runs, every pull request is reviewed line by line before it is merged.
+Contributions are welcome: bug reports, ideas and pull requests. Testing on macOS is especially welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to report a bug or send a change. Because this plugin runs on every command Claude Code runs, every pull request is reviewed line by line before it is merged.
 
 ## License
 
