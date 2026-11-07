@@ -270,6 +270,23 @@ class App:
             return hits[0]
         return job.get("log")
 
+    @staticmethod
+    def counted_output(job, started):
+        """(pct, text) from the output the hook's watcher found for a Claude task (out_dir + pattern), or None."""
+        folder, pattern = job.get("out_dir"), job.get("pattern")
+        if not folder or not pattern:
+            return None
+        try:
+            names = os.listdir(folder)
+        except OSError:
+            return None
+        if job.get("first") is not None and job.get("last") is not None:
+            pct, text, _ = core.parse_files(names, pattern, job["first"], job["last"], job.get("unit") or "frames")
+            return pct, text
+        entries = [(n, mtime(os.path.join(folder, n)) or 0) for n in names]
+        pct, text, _ = core.count_new_files(entries, pattern, started, job.get("unit") or "files", job.get("total"))
+        return pct, text
+
     def get_state(self, job, now, started):
         kind = job.get("kind")
         if kind == "shell":
@@ -281,6 +298,9 @@ class App:
                 return (-1, "running", "run") if now - started < 60 else (100, "finished", "done")
             if plat.file_in_use(log) is False and now - (mtime(log) or now) > 10:
                 return 100, "finished", "done"
+            counted = self.counted_output(job, started)   # output files the hook's watcher found for this task
+            if counted:
+                return counted[0], counted[1], "run"
             shown = core.parse_output_progress(read_tail(log, 4096))   # "42%", "12/48", "Fra:193" in its output
             return (shown[0], shown[1], "run") if shown else (-1, "running", "run")
         if kind == "files":
@@ -298,7 +318,8 @@ class App:
                 return 100, "finished", "done"
             if job.get("state") == "fail":
                 return 100, "failed", "fail"
-            return -1, "running (foreground)", "run"
+            counted = self.counted_output(job, started)
+            return (counted[0], counted[1], "run") if counted else (-1, "running (foreground)", "run")
         if kind == "hf":
             return core.parse_hf(read_tail(job.get("log")))
         if kind == "ffmpeg":
@@ -359,7 +380,8 @@ class App:
             r.title, r.job = title, job
 
             pct, text, state = self.get_state(job, now, started)
-            log_time = mtime(job.get("log")) or started
+            # activity: its log/output changing, or new files landing in the output folder the watcher found
+            log_time = max(mtime(job.get("log")) or started, mtime(job.get("out_dir")) or 0)
             alive = cpu = None
             if job.get("pid"):
                 alive = plat.pid_alive(job["pid"])

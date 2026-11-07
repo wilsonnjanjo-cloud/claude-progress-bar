@@ -6,6 +6,7 @@ tests/test_core.py describe the expected behaviour; keep both implementations pa
 Nothing here touches the operating system: callers pass in what they measured (file times, CPU seconds, ...).
 """
 import json
+import os
 import re
 
 WARN_AFTER = 120   # amber: quiet this long (no sound)
@@ -70,10 +71,8 @@ def parse_ffmpeg(tail, total):
 
 
 def pattern_regex(pattern):
-    """File pattern with #### for the number, e.g. "f_####.png" -> regex matching f_0193.png (case-insensitive).
-    A pattern without # matches any number before the extension: "*.png" style is not needed."""
-    if "#" not in pattern:
-        return re.compile(r"^.*?(\d+)\D*$", re.I)
+    """File pattern -> regex (case-insensitive). #### stands for the number and is captured: "f_####.png" matches
+    f_0193.png. Without #, * is a wildcard: "*.png" matches any .png (nothing captured)."""
     parts = re.split(r"(#+)", pattern)
     rx = "".join(r"(\d+)" if p.startswith("#") else re.escape(p).replace(r"\*", ".*") for p in parts)
     return re.compile("^" + rx + "$", re.I)
@@ -88,7 +87,7 @@ def parse_files(names, pattern, first, last, unit="frames"):
     have = set()
     for n in names:
         m = rx.match(n)
-        if m:
+        if m and m.groups():
             k = int(m.group(1))
             if first <= k <= last:
                 have.add(k)
@@ -96,6 +95,132 @@ def parse_files(names, pattern, first, last, unit="frames"):
     if done >= total:
         return 100, "%d/%d %s" % (total, total, unit), "done"
     return int(100 * done / total), "%d/%d %s" % (done, total, unit), "run"
+
+
+def count_new_files(entries, pattern, since, unit="files", total=None):
+    """Files matching `pattern` written since `since` (entries = [(name, mtime)]). With a known total:
+    "37/120 images" and a percentage; without: "37 new images" (pct -1). Returns (pct, text, state)."""
+    rx = pattern_regex(pattern)
+    n = sum(1 for name, mt in entries if mt >= since - 1 and rx.match(name))
+    if total:
+        return min(100, int(100 * n / total)), "%d/%d %s" % (min(n, total), total, unit), "run"
+    return -1, "%d new %s" % (n, unit), "run"
+
+
+# ---------------------------------------------------------------- recognising countable work from a Claude task
+
+UNITS = r"frames?|images?|photos?|pictures?|files?|pages?|clips?|videos?|items?|tiles?|thumbnails?|slides?|documents?|records?|rows?"
+
+
+def _unit(word):
+    w = word.lower()
+    return w if w.endswith("s") else w + "s"
+
+
+def guess_range(*texts):
+    """A numbered range in a task's description or command: "frames 241-264", "pages 1 to 40", "images 1..120".
+    Returns (first, last, unit) or None."""
+    for t in texts:
+        m = re.search(r"\b(%s)\s*(\d+)\s*(?:-|\u2013|to|\.\.)\s*(\d+)" % UNITS, t or "", re.I)
+        if m and int(m.group(2)) <= int(m.group(3)) and int(m.group(3)) - int(m.group(2)) < 100000:
+            return int(m.group(2)), int(m.group(3)), _unit(m.group(1))
+    return None
+
+
+def guess_count(*texts):
+    """A planned count in a task's description: "Convert 120 images", "render 48 frames", "export 12 pages".
+    Returns (total, unit) or None."""
+    for t in texts:
+        m = re.search(r"\b(\d+)\s+(?:[A-Za-z-]+\s+)?(%s)\b" % UNITS, t or "", re.I)
+        if m and 0 < int(m.group(1)) < 1000000:
+            return int(m.group(1)), _unit(m.group(2))
+    return None
+
+
+def blender_cli(command):
+    """Frame range and output from a Blender command line: -s/--frame-start, -e/--frame-end, -f/--render-frame,
+    -o/--render-output. Returns dict(first, last, output) with any of them None, or None if not Blender."""
+    if not re.search(r"blender(\.exe)?\b", command or "", re.I):
+        return None
+
+    def arg(*names):
+        for n in names:
+            m = re.search(r"(?:^|\s)%s[\s=]+(\"[^\"]*\"|'[^']*'|\S+)" % re.escape(n), command)
+            if m:
+                return m.group(1).strip("\"'")
+        return None
+    first, last, frame = arg("-s", "--frame-start"), arg("-e", "--frame-end"), arg("-f", "--render-frame")
+    if frame and re.fullmatch(r"\d+", frame):
+        first = last = frame
+    elif frame and re.fullmatch(r"(\d+)\.\.(\d+)", frame):
+        first, last = frame.split("..")
+    return {"first": int(first) if first and first.isdigit() else None,
+            "last": int(last) if last and last.isdigit() else None,
+            "output": arg("-o", "--render-output")}
+
+
+def blender_output_pattern(output, blend_dir):
+    """Blender -o value -> (folder, file pattern). "//frames/f_####" is relative to the .blend; no # means Blender
+    appends a 4-digit number. The extension comes from the scene, so any extension matches."""
+    if not output:
+        return None
+    if output.startswith("//"):
+        output = os.path.join(blend_dir or "", output[2:])
+    folder, base = os.path.split(output.replace("/", os.sep))
+    if "#" not in base:
+        base += "####"
+    return folder, base + ".*"
+
+
+# working files that appear while any task runs; never counted as output
+NOISE = re.compile(r"\.(log|tmp|temp|lock|pyc|jsonl|err|out|heartbeat|job|part|crdownload|swp)$|^~|^\.", re.I)
+
+
+def numbered_signature(name):
+    """f_0193.png -> ("f_####.png", 193); None if the name has no trailing number before its extension."""
+    m = re.match(r"^(.*?)(\d+)(\.[A-Za-z0-9]{1,5})$", name)
+    if not m:
+        return None
+    return m.group(1) + "#" * len(m.group(2)) + m.group(3), int(m.group(2))
+
+
+def pick_output(listing, since, rng=None):
+    """Where a task is producing countable output. listing = {folder: [(name, mtime), ...]}.
+    Prefers a numbered sequence (f_0193.png ...) with files in the range or written since the task started; otherwise
+    a folder where at least 2 files of one type have been written since the start ("*.png").
+    Returns (folder, pattern, numbered) or None."""
+    best, best_score = None, 0
+    for folder, entries in listing.items():
+        groups = {}
+        for name, mt in entries:
+            if NOISE.search(name):
+                continue
+            sig = numbered_signature(name)
+            new = mt >= since - 1
+            if sig:
+                g = groups.setdefault((sig[0], True), [0, 0, 0])
+                g[0] += 1
+                g[1] += new
+                g[2] += bool(rng) and rng[0] <= sig[1] <= rng[1]
+            ext = os.path.splitext(name)[1].lower()
+            if ext and new:
+                g = groups.setdefault(("*" + ext, False), [0, 0, 0])
+                g[0] += 1
+                g[1] += 1
+        for (pattern, numbered), (total, new, in_range) in groups.items():
+            if numbered:
+                if total < 2 and not new:
+                    continue   # a lone numbered file is not a sequence
+                if not (new or in_range):
+                    continue
+                score = 100000 + new * 1000 + in_range * 10 + total
+            else:
+                if new < 2:
+                    continue   # one new file is not a batch
+                score = new
+            if score > best_score:
+                best, best_score = (folder, pattern, numbered), score
+    return best
 
 
 def parse_output_progress(tail):

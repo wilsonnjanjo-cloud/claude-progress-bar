@@ -163,7 +163,6 @@ function Fmt-Age($sec) { if ($sec -lt 90) { "{0:0}s" -f $sec } elseif ($sec -lt 
 
 function Get-PatternRegex($pattern) {
   # file pattern with #### for the number ("f_####.png"); same rules as cpb_core.pattern_regex
-  if ($pattern -notmatch '#') { return '^.*?(\d+)\D*$' }
   $rx = ($pattern -split '(#+)' | ForEach-Object { if ($_ -match '^#+$') { '(\d+)' } else { [regex]::Escape($_).Replace('\*', '.*') } }) -join ''
   return "^$rx$"
 }
@@ -203,11 +202,30 @@ function Get-OutputProgress($tail) {
   return $null
 }
 
+function Get-CountedOutput($job) {
+  # (pct, text) from the output the hook's watcher found for a Claude task (out_dir + pattern), or $null.
+  # Same as App.counted_output in progress_window_mac.py.
+  if (-not $job.out_dir -or -not $job.pattern -or -not (Test-Path -LiteralPath $job.out_dir)) { return $null }
+  if ($null -ne $job.first -and $null -ne $job.last) {
+    $s = Get-FilesState ([pscustomobject]@{ log = $job.out_dir; pattern = $job.pattern; first = $job.first; last = $job.last; unit = $(if ($job.unit) { $job.unit } else { "frames" }) })
+    return @($s[0], $s[1])
+  }
+  $since = [DateTimeOffset]::FromUnixTimeMilliseconds([long](([double]$job.started - 1) * 1000)).LocalDateTime
+  $rx = [regex]::new((Get-PatternRegex ([string]$job.pattern)), 'IgnoreCase')
+  $n = 0
+  try { foreach ($f in [IO.DirectoryInfo]::new([string]$job.out_dir).EnumerateFiles()) { if ($f.LastWriteTime -ge $since -and $rx.IsMatch($f.Name)) { $n++ } } } catch {}
+  $unit = if ($job.unit) { $job.unit } else { "files" }
+  if ($job.total) { $t = [int]$job.total; return @([Math]::Min(100, [int][Math]::Floor(100 * $n / $t)), "$([Math]::Min($n, $t))/$t $unit") }
+  return @(-1, "$n new $unit")
+}
+
 function Get-State($job, $file) {
   # returns @(pct, text, state); pct -1 = no percentage (marquee); state = run | done | fail
   switch ($job.kind) {
     "shell" {
       if (-not (Test-Held $job.log $job.started)) { return @(100, "finished", "done") }
+      $counted = Get-CountedOutput $job   # output files the hook's watcher found for this task
+      if ($counted) { return @($counted[0], $counted[1], "run") }
       $shown = Get-OutputProgress (Read-Tail $job.log 4096)
       if ($shown) { return @($shown[0], $shown[1], "run") }
       return @(-1, "running", "run")
@@ -220,6 +238,8 @@ function Get-State($job, $file) {
     "fg" {
       if ($job.state -eq "done") { return @(100, "finished", "done") }
       if ($job.state -eq "fail") { return @(100, "failed", "fail") }
+      $counted = Get-CountedOutput $job
+      if ($counted) { return @($counted[0], $counted[1], "run") }
       return @(-1, "running (foreground)", "run")
     }
     "hf" {
@@ -350,6 +370,8 @@ $timer.Add_Tick({
     $elapsed = ($now - $started).TotalSeconds
     $r.job = $job; $r.startedAt = $started   # kept for "Copy details" (the job file is deleted when the job ends)
     $logTime = if ($job.log -and (Test-Path -LiteralPath $job.log)) { (Get-Item -LiteralPath $job.log).LastWriteTime } else { $started }
+    # activity also counts new files landing in the output folder the hook's watcher found for this task
+    if ($job.out_dir -and (Test-Path -LiteralPath $job.out_dir)) { $od = (Get-Item -LiteralPath $job.out_dir).LastWriteTime; if ($od -gt $logTime) { $logTime = $od } }
     $quiet = ($now - $logTime).TotalSeconds
     # learn the job's own rhythm: the longest normal gap between log updates seen so far
     if ($r.lastLogTime -and $logTime -gt $r.lastLogTime) {

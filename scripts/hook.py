@@ -218,6 +218,19 @@ def ensure_window():
 FG_MIN_S = 10  # a foreground command gets a bar only once it has run this long
 
 
+def spawn_self(*extra):
+    """Run this script again, detached, with extra arguments (never blocks the hook)."""
+    args = [sys.executable, os.path.abspath(__file__)] + list(extra)
+    if not WIN:
+        subprocess.Popen(args, start_new_session=True, close_fds=True,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return
+    try:
+        subprocess.Popen(args, creationflags=NO_WINDOW | 0x00000200 | 0x01000000, close_fds=True)
+    except OSError:
+        subprocess.Popen(args, creationflags=NO_WINDOW | 0x00000200, close_fds=True)
+
+
 def spawn_delayed_launch(job_path):
     args = [sys.executable, os.path.abspath(__file__), "--launch-if-running", job_path]
     if not WIN:
@@ -230,11 +243,107 @@ def spawn_delayed_launch(job_path):
         subprocess.Popen(args, creationflags=NO_WINDOW | 0x00000200, close_fds=True)
 
 
+SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".idea", ".vscode", "site-packages"}
+WATCH_EVERY_S = 4
+WATCH_MAX_S = 7200
+
+
+def task_root(command, cwd):
+    """The folder a task works in: the first `cd <dir>` of its command if there is one, else the session's cwd."""
+    m = re.match(r"""\s*(?:cd|Set-Location|pushd)\s+(?:-LiteralPath\s+|-Path\s+)?("[^"]+"|'[^']+'|\S+)""", command or "", re.I)
+    if m:
+        d = m.group(1).strip("\"'")
+        if WIN and re.match(r"^/[a-zA-Z]/", d):   # Git Bash path /c/Users/... -> C:/Users/...
+            d = d[1].upper() + ":" + d[2:]
+        d = os.path.expanduser(d)
+        if not os.path.isabs(d) and cwd:
+            d = os.path.join(cwd, d)
+        if os.path.isdir(d):
+            return d
+    return cwd if cwd and os.path.isdir(cwd) else None
+
+
+def scan(root, extra_dirs=(), max_dirs=400):
+    """{folder: [(name, mtime)]} for root (3 levels deep) and any extra folders, skipping tool/cache folders."""
+    listing = {}
+    roots = [(root, 3)] if root else []
+    roots += [(d, 0) for d in extra_dirs if d and os.path.isdir(d)]
+    for top, depth in roots:
+        base = top.rstrip("\\/").count(os.sep)
+        for folder, dirs, files in os.walk(top):
+            dirs[:] = [x for x in dirs if x not in SKIP_DIRS and not x.startswith(".")]
+            if folder.count(os.sep) - base >= depth:
+                dirs[:] = []
+            entries = []
+            for name in files[:5000]:
+                try:
+                    entries.append((name, os.path.getmtime(os.path.join(folder, name))))
+                except OSError:
+                    pass
+            if entries:
+                listing[folder] = entries
+            if len(listing) >= max_dirs:
+                return listing
+    return listing
+
+
+def watch_output(job_path):
+    """Runs detached for one task. Looks every few seconds for countable output the task is producing (numbered
+    frames, or a batch of new files) and records it on the task's job: the windows then show "18/24 frames" or
+    "37/120 images" on that task's bar. Ends when the output is found, the task ends, or after 2 hours."""
+    import cpb_core as core
+    t0 = time.time()
+    try:
+        job = json.load(open(job_path, encoding="utf-8"))
+    except Exception:
+        return
+    command, desc = job.get("command") or "", job.get("name") or ""
+    started = float(job.get("started") or t0)
+    root = task_root(command, job.get("cwd"))
+    rng = core.guess_range(desc, command)
+    count = core.guess_count(desc)
+    # folders named in the command (an output folder outside the working folder)
+    extra = [m.strip("\"'") for m in re.findall(r"""\"[A-Za-z]:[\\/][^"]+\"|[A-Za-z]:[\\/][^\s"']+|\"/[^"]+\"""", command)]
+    extra = [x if os.path.isdir(x) else os.path.dirname(x) for x in extra]
+    extra = [x for x in extra if x and os.path.isdir(x) and len(x) > 3][:6]   # never a whole drive
+    b = core.blender_cli(command)
+    if b:
+        if b["first"] is not None and b["last"] is not None:
+            rng = (b["first"], b["last"], "frames")
+        blend = next((p for pair in re.findall(r'"([^"]+\.blend)"|(\S+\.blend)\b', command) for p in pair if p), None)
+        out = core.blender_output_pattern(b["output"], os.path.dirname(os.path.join(root or "", blend)) if blend else root)
+        if out:
+            extra.append(out[0])
+    while time.time() - t0 < WATCH_MAX_S:
+        try:
+            job = json.load(open(job_path, encoding="utf-8"))
+        except Exception:
+            return   # the task ended and its bar was closed
+        if job.get("state") in ("done", "fail", "gone") or job.get("pattern"):
+            return
+        hit = core.pick_output(scan(root, extra), started, rng[:2] if rng else None)
+        if hit:
+            folder, pattern, numbered = hit
+            fields = {"out_dir": folder, "pattern": pattern}
+            if numbered and rng:
+                fields.update(first=rng[0], last=rng[1], unit=rng[2])
+            elif count:
+                fields.update(total=count[0], unit=count[1])
+            else:
+                fields["unit"] = rng[2] if rng else ("frames" if numbered and re.search(r"\.(png|exr|jpe?g|tiff?|\*)$", pattern, re.I) else "files")
+            key = os.path.basename(job_path)[:-4]
+            write_job(key, fields)
+            log_event("output found", key, folder, pattern, fields.get("unit"))
+            return
+        time.sleep(WATCH_EVERY_S)
+
+
 def launch_if_running(job_path):
     time.sleep(FG_MIN_S)
     try:
         if json.load(open(job_path, encoding="utf-8")).get("state") == "run":
             ensure_window()
+            watch_output(job_path)
     except Exception:
         pass
 
@@ -295,7 +404,8 @@ def main():
             # (a permission denial or an interrupted turn sends no PostToolUse)
             json.dump({"kind": "fg", "name": ti.get("description") or ti.get("command", "")[:60],
                        "project": project, "started": time.time(), "state": "run",
-                       "tuid": tuid, "transcript": tp, "session": d.get("session_id") or ""}, f)
+                       "tuid": tuid, "transcript": tp, "session": d.get("session_id") or "",
+                       "command": (ti.get("command") or "")[:4000], "cwd": d.get("cwd") or ""}, f)
         log_event("fg start", sess, tuid[-12:], project, ti.get("description") or ti.get("command", "")[:60])
         spawn_delayed_launch(fg_path)   # the window opens only if the command is still running after FG_MIN_S
         return
@@ -317,8 +427,10 @@ def main():
         write_job(f"{sess}_{tid}", {"kind": "shell", "name": ti.get("description") or ti.get("command", "")[:60],
                                     "project": project, "log": os.path.join(tasks_dir, tid + ".output"),
                                     "started": time.time(), "tid": tid, "transcript": tp,
-                                    "session": d.get("session_id") or ""})
+                                    "session": d.get("session_id") or "",
+                                    "command": (ti.get("command") or "")[:4000], "cwd": d.get("cwd") or ""})
         log_event("bg shell", sess, tid, project, ti.get("description") or ti.get("command", "")[:60])
+        spawn_self("--watch", os.path.join(JOBS, safe(f"{sess}_{tid}") + ".job"))
         ensure_window()
 
     elif ev == "SubagentStart":
@@ -350,7 +462,9 @@ if __name__ == "__main__":
     if not (WIN or MAC):
         sys.exit(0)  # Windows and macOS (beta) only; on Linux the hook does nothing
     try:
-        if len(sys.argv) > 2 and sys.argv[1] == "--launch-if-running":
+        if len(sys.argv) > 2 and sys.argv[1] == "--watch":
+            watch_output(sys.argv[2])
+        elif len(sys.argv) > 2 and sys.argv[1] == "--launch-if-running":
             launch_if_running(sys.argv[2])
         else:
             main()

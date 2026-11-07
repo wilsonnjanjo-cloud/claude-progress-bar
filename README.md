@@ -5,8 +5,9 @@ A small window for **Windows** (and **macOS, in beta**) that shows **one live ba
 - Background shell commands (`run_in_background`, or commands Claude moved to the background)
 - Subagents, named the same way as in Claude Code's Background tasks panel
 - Foreground commands that run longer than 10 seconds
-- Long jobs you register yourself (renders, ffmpeg, scripts) with a real percentage, or a count such as **40/48 frames** from the files a render writes
+- **Counts, automatically:** when Claude starts something that produces countable output, its bar shows how far it has got, for example **18/24 frames** for a render or **37/120 images** for a batch conversion. Nothing to set up: see [Automatic counts](#automatic-counts)
 - Progress that background commands print (`42%`, `12/48`, Blender's `Fra:193`) is shown on their bar automatically
+- Long jobs you register yourself (renders, ffmpeg, scripts) with a real percentage
 
 <!-- ![Claude Progress Bar](docs/screenshot.png) -->
 
@@ -66,6 +67,16 @@ The macOS version is new and **has not been tested on a real Mac yet**. It is a 
 - There is no menu-bar status icon yet (the Windows tray icon's equivalent).
 
 If you use a Mac, please run `python3 tests/window_smoke_test.py` from this repository and post the output in the [macOS testers issue](https://github.com/wilsonnjanjo-cloud/claude-progress-bar/issues/1). It takes about a minute and does not touch your real data.
+
+## Automatic counts
+
+When Claude starts a background command (or a foreground one that runs longer than 10 seconds), the plugin starts a small watcher for it. The watcher works out what the task is producing and puts the count on that task's own bar. It needs no registration, no settings and no instructions to Claude:
+
+- **Where:** the task's working folder (3 levels deep), any folder named in its command, and Blender's `-o` output.
+- **What:** a numbered sequence (`f_0241.png`, `page_012.jpg` ...) that is growing, or a batch of new files of one type (`*.webp`).
+- **Out of how many:** a range in the task's description or command (`Render frames 241-264`, `pages 1 to 40`, Blender `-s/-e`), or a number (`Convert 120 images`). Without one, the bar shows `37 new images`.
+
+Logs, temporary files and tool folders (`.git`, `node_modules`, caches) are ignored. Each detection is written to `hook_events.log` ("output found"). The watcher stops as soon as it has found the output, when the task ends, or after 2 hours.
 
 ## Tracking your own long jobs
 
@@ -129,6 +140,8 @@ Runtime data (task files and an event log) lives in `%LOCALAPPDATA%\ClaudeProgre
 
 - `python tests/test_core.py`: the shared behaviour cases (progress formats, file counts, transcripts, stall rules) against the Python core.
 - `pwsh -File tests/windows_parsers_test.ps1`: the same progress and file-count cases against the Windows window.
+- `python tests/watcher_test.py`: the real hook and watcher against a fake render and a fake image batch.
+- `python tests/upgrade_test.py`: a newer version replaces an older running window, never the other way round.
 - `python3 tests/window_smoke_test.py`: runs the Python window for a minute against six fake tasks.
 - `pwsh -File tests/windows_alarm_test.ps1`: the same six tasks against the Windows window.
 

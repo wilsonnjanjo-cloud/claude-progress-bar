@@ -1,9 +1,9 @@
-# Windows parity test: the PowerShell window's file-count and output parsers against the same cases as
+﻿# Windows parity test: the PowerShell window's file-count and output parsers against the same cases as
 # tests/test_core.py (Python). Run: pwsh -File tests\windows_parsers_test.ps1   (or powershell -File ...)
 $src = Join-Path $PSScriptRoot "..\scripts\progress_window.ps1"
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($src, [ref]$null, [ref]$null)
 $ast.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
-  $args[0].Name -in "Get-PatternRegex", "Get-FilesState", "Get-OutputProgress", "Read-Tail", "Test-Held", "Get-State" }, $true) |
+  $args[0].Name -in "Get-PatternRegex", "Get-FilesState", "Get-CountedOutput", "Get-OutputProgress", "Read-Tail", "Test-Held", "Get-State" }, $true) |
   ForEach-Object { . ([scriptblock]::Create($_.Extent.Text)) }
 
 $fails = 0
@@ -23,6 +23,17 @@ Check "files: all present is done" (Get-State $job $null) @(100, "48/48 frames",
 Check "files: missing folder" (Get-State ([pscustomobject]@{ kind = "files"; log = "$dir\nope"; pattern = "f_####.png"; first = 193; last = 240 }) $null) @(0, "0/48 frames", "run")
 New-Item -ItemType File (Join-Path $dir "SHOT_007.PNG") | Out-Null
 Check "files: case-insensitive, own unit" (Get-FilesState ([pscustomobject]@{ log = $dir; pattern = "shot_###.png"; first = 1; last = 10; unit = "images" })) @(10, "1/10 images", "run")
+
+# output found by the hook's watcher, counted on the task's own bar
+$t0 = [DateTimeOffset]::Now.ToUnixTimeMilliseconds() / 1000
+$fr = Join-Path $dir "frames"; New-Item -ItemType Directory -Force $fr | Out-Null
+1..258 | ForEach-Object { New-Item -ItemType File (Join-Path $fr ("f_{0:D4}.png" -f $_)) | Out-Null }
+Check "counted: frames in range" (Get-CountedOutput ([pscustomobject]@{ out_dir = $fr; pattern = "f_####.png"; first = 241; last = 264; unit = "frames"; started = $t0 })) @(75, "18/24 frames")
+$out = Join-Path $dir "out"; New-Item -ItemType Directory -Force $out | Out-Null
+"a", "b", "c" | ForEach-Object { New-Item -ItemType File (Join-Path $out "photo_$_.jpg") | Out-Null }
+Check "counted: new files vs total" (Get-CountedOutput ([pscustomobject]@{ out_dir = $out; pattern = "*.jpg"; total = 120; unit = "images"; started = $t0 })) @(2, "3/120 images")
+Check "counted: new files, no total" (Get-CountedOutput ([pscustomobject]@{ out_dir = $out; pattern = "*.jpg"; unit = "images"; started = $t0 })) @(-1, "3 new images")
+Check "counted: shell task shows the count" (Get-State ([pscustomobject]@{ kind = "fg"; state = "run"; out_dir = $out; pattern = "*.jpg"; total = 120; unit = "images"; started = $t0 }) $null) @(2, "3/120 images", "run")
 
 Check "output: percent" (Get-OutputProgress "loading`nRendering 42%`n") @(42, "Rendering 42%")
 Check "output: N/M" (Get-OutputProgress "frame 12/48 done`n") @(25, "12/48")

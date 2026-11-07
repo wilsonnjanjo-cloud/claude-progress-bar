@@ -33,6 +33,32 @@ check("files: all present is done", c.parse_files(frames + ["f_%04d.png" % i for
 check("files: none yet", c.parse_files([], "f_####.png", 193, 240), (0, "0/48 frames", "run"))
 check("files: case-insensitive, own unit", c.parse_files(["SHOT_007.PNG"], "shot_###.png", 1, 10, "images"), (10, "1/10 images", "run"))
 
+# --- recognising countable work from a task (no registration, no Claude rules)
+check("range from description", c.guess_range("Render frames 241-264 with GPU+CPU workers"), (241, 264, "frames"))
+check("range: pages 1 to 40", c.guess_range("Export pages 1 to 40 as PNG"), (1, 40, "pages"))
+check("range: none", c.guess_range("Write frame progress percentage log"), None)
+check("count from description", c.guess_count("Convert 120 images to WebP"), (120, "images"))
+check("count with an adjective", c.guess_count("Download 12 product photos"), (12, "photos"))
+check("count: none", c.guess_count("Run the tests"), None)
+check("blender -s/-e/-o", c.blender_cli('blender -b "a b/scene.blend" -o //out/f_#### -s 10 -e 20 -a'),
+      {"first": 10, "last": 20, "output": "//out/f_####"})
+check("blender -f single frame", c.blender_cli("blender.exe -b x.blend -f 7")["first"], 7)
+check("not blender", c.blender_cli("python render.py"), None)
+check("blender output pattern", c.blender_output_pattern("//out/f_", "/p")[1], "f_####.*")
+t0 = 1000.0
+listing = {"/p/frames": [("f_%04d.png" % i, 900.0) for i in range(1, 241)] + [("f_%04d.png" % i, 1010.0) for i in range(241, 259)],
+           "/p/logs": [("gpu.log", 1012.0), ("cpu1.log", 1012.0)],
+           "/p": [("table_scene.blend", 500.0)]}
+check("finds the frames folder", c.pick_output(listing, t0, (241, 264)), ("/p/frames", "f_####.png", True))
+check("count frames found", c.parse_files([n for n, _ in listing["/p/frames"]], "f_####.png", 241, 264), (75, "18/24 frames", "run"))
+batch = {"/w/out": [("photo_a.jpg", 1005.0), ("photo_b.jpg", 1006.0), ("photo_c.jpg", 1007.0)], "/w": [("run.log", 1008.0)]}
+check("finds a batch of new files", c.pick_output(batch, t0), ("/w/out", "*.jpg", False))
+check("count new files vs planned total", c.count_new_files(batch["/w/out"], "*.jpg", t0, "images", 120), (2, "3/120 images", "run"))
+check("count new files, no total", c.count_new_files(batch["/w/out"], "*.jpg", t0, "images"), (-1, "3 new images", "run"))
+check("logs alone are not output", c.pick_output({"/w": [("a.log", 1005.0), ("b.log", 1006.0)]}, t0), None)
+check("one new file is not a batch", c.pick_output({"/w": [("a.png", 1005.0)]}, t0), None)
+check("old files only: nothing yet", c.pick_output({"/w": [("a.png", 10.0), ("b.png", 11.0)]}, t0), None)
+
 # --- progress printed by background commands
 check("output: percent", c.parse_output_progress("loading\nRendering 42%\n"), (42, "Rendering 42%"))
 check("output: N/M", c.parse_output_progress("frame 12/48 done\n"), (25, "12/48"))
