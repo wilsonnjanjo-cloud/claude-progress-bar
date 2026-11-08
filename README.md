@@ -10,7 +10,9 @@ A small window for **Windows** (and **macOS, in beta**) that shows **one live ba
 - Progress that background commands print (`42%`, `12/48`, Blender's `Fra:193`) is shown on their bar automatically
 - Long jobs you register yourself (renders, ffmpeg, scripts) with a real percentage
 
-<!-- ![Claude Progress Bar](docs/screenshot.png) -->
+![Claude Progress Bar showing five background tasks: a render at 18/24 frames, an image batch at 37/120, a subagent, a Monitor watch with its countdown, and one stalled job in red](docs/screenshot.png)
+
+*Five tasks from three projects at once: counts and time on the right, the stalled one in red, the totals in the title bar.*
 
 ## What the colours mean
 
@@ -27,6 +29,8 @@ A small window for **Windows** (and **macOS, in beta**) that shows **one live ba
 Each row shows the task name on the left (shortened to fit) and, always fully visible on the right, its count, percentage, time spent and any warning, for example `18/24 frames · 75% · 12m` or `3m · STALLED 5m`. The title bar adds it all up: `Claude Progress Bar - 3 running, 1 stalled`.
 
 Right-click a row to copy a ready-made message for Claude ("Please check whether this task is still making progress or has stalled: …") or the task's log path, or to dismiss the bar.
+
+![Right-click menu: copy the task for Claude, copy its log path, or dismiss the bar](docs/right-click-menu.png)
 
 The window hides itself when nothing is running and comes back when a new task starts. Closing it only hides it. On Windows, quit from the tray icon (**Exit**); on macOS, from the **Progress Bar** menu at the top of the screen (**Quit**). Either way it restarts with the next Claude task.
 
